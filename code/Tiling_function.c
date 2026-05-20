@@ -34,7 +34,7 @@ static void add_to_uarray(uint64_t *array, size_t *length, size_t capacity, uint
     if(*length >= capacity){
         return;
     }
-    if (!is_in_uarray(*array, length, value)) {
+    if (!is_in_uarray(array, length, value)) {
         array[*length] = value;
         (*length)++;
     }
@@ -119,7 +119,7 @@ static void add_to_iarray(int64_t *array, size_t *length,size_t capacity, int64_
     if(*length >= capacity){
         return;
     }
-    if (!is_in_iarray(*array, length, value)) {
+    if (!is_in_iarray(array, length, value)) {
         array[*length] = value;
         (*length)++;
     }
@@ -228,6 +228,29 @@ void *tiling_int(size_t num, uint32_t precision, bool sign)
 float types tiling function. The function will return an array of samples for the specified precision (32 or 64 bits).
 ----------------------------------------------------------------------------------------------------------*/
 
+// Helper function to determine if the number is already in the float array
+static bool is_in_farray(float *array, size_t *length, float value)
+{
+    for (size_t i = 0; i < *length; i++) {
+        if (array[i] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Helper function to add the value to the array if it is not already in the float array
+static void add_to_farray(float *array, size_t *length,size_t capacity, float value)
+{
+    if(*length >= capacity){
+        return;
+    }
+    if (!is_in_farray(array, length, value)) {
+        array[*length] = value;
+        (*length)++;
+    }
+}
+
 // Helper function that return an array of samples for float32 type.
 static float *tiling_float32(size_t num, uint32_t precision)
 // REQUIRES: num > 0;
@@ -256,8 +279,38 @@ static float *tiling_float32(size_t num, uint32_t precision)
         return result;
     }
 
-    size_t num_pair = (num + 1) / 2;
+    
     size_t count = 0;
+
+    //Special cases to be considered first
+    add_to_farray(result, &count, num, 0.0f);
+    add_to_farray(result, &count, num, -0.0f);
+
+    add_to_farray(result, &count, num, 1.0f);
+    add_to_farray(result, &count, num, -1.0f);
+    add_to_farray(result, &count, num, 0.5f);
+    add_to_farray(result, &count, num, -0.5f);
+
+    add_to_farray(result, &count, num, FLT_EPSILON);
+    add_to_farray(result, &count, num, -FLT_EPSILON);
+    add_to_farray(result, &count, num, 1.0f + FLT_EPSILON);
+    add_to_farray(result, &count, num, -(1.0f + FLT_EPSILON));
+
+    add_to_farray(result, &count, num, FLT_MAX);
+    add_to_farray(result, &count, num, -FLT_MAX);
+    add_to_farray(result, &count, num, nextafterf(FLT_MAX, 0.0f));
+    add_to_farray(result, &count, num, nextafterf(-FLT_MAX, 0.0f));
+
+    add_to_farray(result, &count, num, FLT_MIN);
+    add_to_farray(result, &count, num, -FLT_MIN);
+    add_to_farray(result, &count, num, nextafterf(FLT_MIN, 0.0f));
+    add_to_farray(result, &count, num, nextafterf(-FLT_MIN, 0.0f));
+
+    add_to_farray(result, &count, num, nextafterf(0.0f, 1.0f));
+    add_to_farray(result, &count, num, nextafterf(0.0f, -1.0f));
+
+    //Places for all remaining values spaced evenly
+    size_t num_pair = (num - count + 1) / 2;
 
     for(size_t i = 0; i<num_pair && count < num; i++){
         int exp = 0;
@@ -267,16 +320,48 @@ static float *tiling_float32(size_t num, uint32_t precision)
         else{
             exp = min_exp + (i * exp_range) / (num_pair - 1);
         }
-        result[count++] = ldexpf(1.0f, exp);
+        add_to_farray(result, &count, num, ldexpf(1.0f, exp));
 
         if(count < num){
-            result[count++] = -ldexpf(1.0f, exp);
+            add_to_farray(result, &count, num, -ldexpf(1.0f, exp));
+        }
+    }
+
+    //To fill in any remaining slots if there are duplicates
+    while(count < num){
+        int exp = min_exp + uniform_offset(exp_range, count, num);
+        add_to_farray(result, &count, num, ldexpf(1.0f, exp));
+        if(count < num){
+            add_to_farray(result, &count, num, -ldexpf(1.0f, exp));
         }
     }
 
     (void)precision; // to avoid unused parameter warning
 
     return result;
+}
+
+//Helper function to determine if the number is already in the double array
+static bool is_in_darray(double *array, size_t *length, double value)
+{
+    for (size_t i = 0; i < *length; i++) {
+        if (array[i] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Helper function to add the value to the array if it is not already in the double array
+static void add_to_darray(double *array, size_t *length,size_t capacity, double value)
+{
+    if(*length >= capacity){
+        return;
+    }
+    if (!is_in_darray(array, length, value)) {
+        array[*length] = value;
+        (*length)++;
+    }
 }
 
 // Helper function that return an array of samples for float64 type.
@@ -307,9 +392,36 @@ static double *tiling_float64(size_t num, uint32_t precision)
         return result;
     }
 
-    size_t num_pair = (num + 1) / 2;
     size_t count = 0;
+    //Special cases to be considered first
+    add_to_darray(result, &count, num, 0.0);
+    add_to_darray(result, &count, num, -0.0);
+    add_to_darray(result, &count, num, 1.0);
+    add_to_darray(result, &count, num, -1.0);
+    add_to_darray(result, &count, num, 0.5);
+    add_to_darray(result, &count, num, -0.5);
 
+    add_to_darray(result, &count, num, DBL_EPSILON);
+    add_to_darray(result, &count, num, -DBL_EPSILON);
+    add_to_darray(result, &count, num, 1.0 + DBL_EPSILON);
+    add_to_darray(result, &count, num, -(1.0 + DBL_EPSILON));
+
+    add_to_darray(result, &count, num, DBL_MAX);
+    add_to_darray(result, &count, num, -DBL_MAX);
+    add_to_darray(result, &count, num, nextafter(DBL_MAX, 0.0));
+    add_to_darray(result, &count, num, nextafter(-DBL_MAX, 0.0));
+
+    add_to_darray(result, &count, num, DBL_MIN);
+    add_to_darray(result, &count, num, -DBL_MIN);
+    add_to_darray(result, &count, num, nextafter(DBL_MIN, 0.0));
+    add_to_darray(result, &count, num, nextafter(-DBL_MIN, 0.0));
+
+    add_to_darray(result, &count, num, nextafter(0.0, 1.0));
+    add_to_darray(result, &count, num, nextafter(0.0, -1.0));
+
+    //Places for all remaining values spaced evenly
+
+    size_t num_pair = ((num-count) + 1) / 2;
     for(size_t i = 0; i<num_pair && count < num; i++){
         int exp = 0;
         if(num_pair == 1){

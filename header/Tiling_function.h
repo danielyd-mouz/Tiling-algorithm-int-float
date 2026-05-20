@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <float.h>
 #include <limits.h>
+#include <string.h>
 #include <math.h>
 
 /*

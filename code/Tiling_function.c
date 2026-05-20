@@ -5,6 +5,7 @@
 #include <math.h>
 #include <limits.h>
 #include <float.h>
+#include <string.h>
 #include "../header/Tiling_function.h"
 
 //Helper function to calculate the offset for the uniform distribution of values
@@ -65,11 +66,12 @@ static uint64_t *unsigned_tiling_int(size_t num, uint32_t precision)
 
     add_to_uarray(result, &count, num, 1);
     add_to_uarray(result, &count, num, max_value - 1);
-    add_to_uarrauy(result, &count, num, max_value / 2);
+    add_to_uarray(result, &count, num, max_value / 2);
 
-    for(uint32_t i = 1; i< precision-1 && count < num; i++){
+    for(uint32_t i = 1; i< precision && count < num; i++){
         uint64_t value = 1ULL << i;
         add_to_uarray(result, &count, num, value);
+
         if(count < num){
             add_to_uarray(result, &count, num, max_value - value);
         }
@@ -82,24 +84,24 @@ static uint64_t *unsigned_tiling_int(size_t num, uint32_t precision)
     }
 
     //to fill in any remaining slots if there are duplicates
-    while(count < num){
-        uint64_t value = uniform_offset(max_value, count, num);
+    size_t index = 0;
+    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
+    while(count < num && index < max_attempts){ // limit the number of attempts to avoid infinite loop
+        uint64_t value = uniform_offset(max_value, index, max_attempts);
         add_to_uarray(result, &count, num, value);
+        index ++;
+    }
+
+    uint64_t val = 0;
+    while(count < num && val <= max_value){ // fill in any remaining slots with sequential values
+        add_to_uarray(result, &count, num, val);
+        if(val == max_value){
+            break;
+        }
+        val++;
     }
 
     return result;
-}
-
-// Helper function to convert uint64_t offset to int64_t value for 64-bit precision
-static int64_t signed64_from_offset(uint64_t offset)
-{
-    uint64_t half = 1ULL << 63;
-
-    if (offset < half) {
-        return INT64_MIN + (int64_t)offset;
-    } else {
-        return (int64_t)(offset - half);
-    }
 }
 
 // Helper function to determine if the number is already in the array
@@ -135,19 +137,22 @@ static int64_t *signed_tiling_int(size_t num, uint32_t precision)
         return result;
     }
 
+    uint64_t magnitude;
+    int64_t max_value;
+    int64_t min_value;
+    uint64_t max_offset;
+
     if (precision == 64) {
-        for (size_t i = 0; i < num; i++) {
-            uint64_t offset = uniform_offset(UINT64_MAX, i, num);
-            result[i] = signed64_from_offset(offset);
-        }
-
-        return result;
+        magnitude = 1ULL << 63;
+        max_value = INT64_MAX;
+        min_value = INT64_MIN;
+        max_offset = UINT64_MAX;
+    }else{
+        magnitude = 1ULL << (precision - 1);
+        max_value = (int64_t)(magnitude - 1);
+        min_value = -max_value - 1;
+        max_offset = (uint64_t)(max_value - min_value);
     }
-
-    uint64_t magnitude = 1ULL << (precision - 1);
-    int64_t max_value = (int64_t)(magnitude - 1);
-    int64_t min_value = -max_value - 1;
-    uint64_t max_offset = (uint64_t)(max_value - min_value);
 
     size_t count = 0;
     
@@ -155,12 +160,15 @@ static int64_t *signed_tiling_int(size_t num, uint32_t precision)
     add_to_iarray(result, &count, num, min_value);
     add_to_iarray(result, &count, num, max_value);
     add_to_iarray(result, &count, num, 0);
+
+    add_to_iarray(result, &count, num, -1);
+    add_to_iarray(result, &count, num, 1);
     
     add_to_iarray(result, &count, num, min_value + 1);
     add_to_iarray(result, &count, num, max_value - 1);
     add_to_iarray(result, &count, num, max_value / 2);
 
-    for(uint32_t i = 1; i < precision - 1 && count < num; i++){
+    for(uint32_t i = 1; i +1 < precision && count < num; i++){
         int64_t value = (int64_t)(1ULL << i);
         add_to_iarray(result, &count, num, value);
         if(count < num){
@@ -176,10 +184,21 @@ static int64_t *signed_tiling_int(size_t num, uint32_t precision)
     }
 
     //To fill in any remaining slots if there are duplicates
-    while (count < num) {
-        uint64_t offset = uniform_offset(max_offset, count, num);
+    size_t index = 0;
+    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
+    while (count < num && index < max_attempts) { // limit the number of attempts to avoid infinite loop
+        uint64_t offset = uniform_offset(max_offset, index, max_attempts);
         add_to_iarray(result, &count, num, (int64_t)((__int128_t)min_value + offset));
-        count++;
+        index++;
+    }
+
+    int64_t val = min_value;
+    while (count < num && val <= max_value) { // fill in any remaining slots with sequential values
+        add_to_iarray(result, &count, num, val);
+        if (val == max_value) {
+            break;
+        }
+        val++;
     }
 
     return result;
@@ -228,11 +247,20 @@ void *tiling_int(size_t num, uint32_t precision, bool sign)
 float types tiling function. The function will return an array of samples for the specified precision (32 or 64 bits).
 ----------------------------------------------------------------------------------------------------------*/
 
+//comparing two float numbers in bit level
+static bool float_equal(float a, float b)
+{
+    uint32_t a_bits, b_bits;
+    memcpy(&a_bits, &a, sizeof(float));
+    memcpy(&b_bits, &b, sizeof(float));
+    return a_bits == b_bits;
+}
+
 // Helper function to determine if the number is already in the float array
 static bool is_in_farray(float *array, size_t *length, float value)
 {
     for (size_t i = 0; i < *length; i++) {
-        if (array[i] == value) {
+        if (float_equal(array[i], value)) {
             return true;
         }
     }
@@ -251,8 +279,54 @@ static void add_to_farray(float *array, size_t *length,size_t capacity, float va
     }
 }
 
+static float float_from_bits(uint32_t bits)
+{
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static void fill_float32_by_bits(float *result, size_t *count, size_t capacity)
+{
+    uint32_t max_positive_finite_bits = 0x7F7FFFFFu;
+
+    size_t remaining = capacity - *count;
+    size_t max_attempts = remaining > SIZE_MAX / 4 ? SIZE_MAX : remaining * 4;
+
+    if (max_attempts < 2) {
+        max_attempts = 2;
+    }
+
+    // First: representation-space uniform samples
+    for (size_t i = 0; *count < capacity && i < max_attempts; i++) {
+        uint32_t bits =
+            (uint32_t)uniform_offset(max_positive_finite_bits, i, max_attempts);
+
+        add_to_farray(result, count, capacity, float_from_bits(bits));
+
+        if (*count < capacity) {
+            add_to_farray(result, count, capacity,
+                          float_from_bits(bits | 0x80000000u));
+        }
+    }
+
+    // Second: sequential bit-pattern fallback
+    for (uint32_t bits = 0; *count < capacity; bits++) {
+        add_to_farray(result, count, capacity, float_from_bits(bits));
+
+        if (*count < capacity) {
+            add_to_farray(result, count, capacity,
+                          float_from_bits(bits | 0x80000000u));
+        }
+
+        if (bits == max_positive_finite_bits) {
+            break;
+        }
+    }
+}
+
 // Helper function that return an array of samples for float32 type.
-static float *tiling_float32(size_t num, uint32_t precision)
+static float *tiling_float32(size_t num)
 // REQUIRES: num > 0;
 // REQUIRES: precision == 32;
 // REQUIRES num <= number of available values for the specified precision;
@@ -266,11 +340,6 @@ static float *tiling_float32(size_t num, uint32_t precision)
     int min_exp = FLT_MIN_EXP - FLT_MANT_DIG;
     int max_exp = FLT_MAX_EXP - 1;
     int exp_range = max_exp - min_exp;
-
-    if(num > 2 * (size_t)(exp_range+1)){
-        printf("Number of samples exceeds number of available values for the specified precision.\n");
-        return NULL;
-    }
 
     float *result = xcalloc(num,sizeof(float));
 
@@ -313,12 +382,12 @@ static float *tiling_float32(size_t num, uint32_t precision)
     size_t num_pair = (num - count + 1) / 2;
 
     for(size_t i = 0; i<num_pair && count < num; i++){
-        int exp = 0;
+        int exp;
         if(num_pair == 1){
-            exp = 1.0f;
+            exp = 0;
         }
         else{
-            exp = min_exp + (i * exp_range) / (num_pair - 1);
+            exp = min_exp + (int)(((__uint128_t)i * exp_range) / (num_pair - 1));
         }
         add_to_farray(result, &count, num, ldexpf(1.0f, exp));
 
@@ -328,24 +397,42 @@ static float *tiling_float32(size_t num, uint32_t precision)
     }
 
     //To fill in any remaining slots if there are duplicates
-    while(count < num){
-        int exp = min_exp + uniform_offset(exp_range, count, num);
+    size_t index = 0;
+    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
+    while(count < num && index < max_attempts){ // limit the number of attempts to avoid infinite loop
+        int exp = min_exp + uniform_offset(exp_range, index, max_attempts);
         add_to_farray(result, &count, num, ldexpf(1.0f, exp));
         if(count < num){
             add_to_farray(result, &count, num, -ldexpf(1.0f, exp));
         }
+        index ++;
     }
 
-    (void)precision; // to avoid unused parameter warning
+    // If there are still remaining slots, fill them with sequential values
+    fill_float32_by_bits(result, &count, num);
+
+    if (count < num) {
+        printf("Failed to generate enough unique float32 samples.\n");
+        free(result);
+        return NULL;
+    }
 
     return result;
 }
 
+//comparing two double numbers in bit level
+static bool double_equal(double a, double b)
+{
+    uint64_t a_bits, b_bits;
+    memcpy(&a_bits, &a, sizeof(double));
+    memcpy(&b_bits, &b, sizeof(double));
+    return a_bits == b_bits;
+}
 //Helper function to determine if the number is already in the double array
 static bool is_in_darray(double *array, size_t *length, double value)
 {
     for (size_t i = 0; i < *length; i++) {
-        if (array[i] == value) {
+        if (double_equal(array[i], value)) {
             return true;
         }
     }
@@ -364,8 +451,54 @@ static void add_to_darray(double *array, size_t *length,size_t capacity, double 
     }
 }
 
+static double double_from_bits(uint64_t bits)
+{
+    double value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static void fill_float64_by_bits(double *result, size_t *count, size_t capacity)
+{
+    uint64_t max_positive_finite_bits = 0x7FEFFFFFFFFFFFFFULL;
+
+    size_t remaining = capacity - *count;
+    size_t max_attempts = remaining > SIZE_MAX / 4 ? SIZE_MAX : remaining * 4;
+
+    if (max_attempts < 2) {
+        max_attempts = 2;
+    }
+
+    // First: representation-space uniform samples
+    for (size_t i = 0; *count < capacity && i < max_attempts; i++) {
+        uint64_t bits =
+            uniform_offset(max_positive_finite_bits, i, max_attempts);
+
+        add_to_darray(result, count, capacity, double_from_bits(bits));
+
+        if (*count < capacity) {
+            add_to_darray(result, count, capacity,
+                          double_from_bits(bits | 0x8000000000000000ULL));
+        }
+    }
+
+    // Second: sequential bit-pattern fallback
+    for (uint64_t bits = 0; *count < capacity; bits++) {
+        add_to_darray(result, count, capacity, double_from_bits(bits));
+
+        if (*count < capacity) {
+            add_to_darray(result, count, capacity,
+                          double_from_bits(bits | 0x8000000000000000ULL));
+        }
+
+        if (bits == max_positive_finite_bits) {
+            break;
+        }
+    }
+}
+
 // Helper function that return an array of samples for float64 type.
-static double *tiling_float64(size_t num, uint32_t precision)
+static double *tiling_float64(size_t num)
 // REQUIRES: num > 0;
 // REQUIRES: precision == 64;
 // REQUIRES num <= number of available values for the specified precision;
@@ -379,11 +512,6 @@ static double *tiling_float64(size_t num, uint32_t precision)
     int min_exp = DBL_MIN_EXP - DBL_MANT_DIG;
     int max_exp = DBL_MAX_EXP - 1;
     int exp_range = max_exp - min_exp;
-
-    if(num > 2 * (size_t)(exp_range+1)){
-        printf("Number of samples exceeds number of available values for the specified precision.\n");
-        return NULL;
-    }
 
     double *result = xcalloc(num,sizeof(double));
 
@@ -424,21 +552,36 @@ static double *tiling_float64(size_t num, uint32_t precision)
     size_t num_pair = ((num-count) + 1) / 2;
     for(size_t i = 0; i<num_pair && count < num; i++){
         int exp = 0;
-        if(num_pair == 1){
-            result[count++] = 1.0;
-        }
-        else{
-            exp = min_exp + (i * exp_range) / (num_pair - 1);
+        if(num_pair > 1){
+            exp = min_exp + (int)(((__uint128_t)i * exp_range) / (num_pair - 1));
         }
 
-        result[count++] = ldexp(1.0, exp);
+        add_to_darray(result, &count, num, ldexp(1.0, exp));
 
         if(count < num){
-            result[count++] = -ldexp(1.0, exp);
+            add_to_darray(result, &count, num, -ldexp(1.0, exp));
         }
     }
 
-    (void)precision; // to avoid unused parameter warning
+    size_t index = 0;
+    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
+    while(count < num && index < max_attempts){ // limit the number of attempts to avoid infinite loop
+        int exp = min_exp + uniform_offset(exp_range, index, max_attempts);
+        add_to_darray(result, &count, num, ldexp(1.0, exp));
+        if(count < num){
+            add_to_darray(result, &count, num, -ldexp(1.0, exp));
+        }
+        index ++;
+    }
+
+    // If there are still remaining slots, fill them with sequential values
+    fill_float64_by_bits(result, &count, num);
+
+    if (count < num) {
+        printf("Failed to generate enough unique float64 samples.\n");
+        free(result);
+        return NULL;
+    }
 
     return result;
 }
@@ -462,10 +605,10 @@ void *tiling_float(size_t num, uint32_t precision)
 
     // Call the appropriate helper function based on the precision parameter
     if(precision == 32){
-        return (void *)tiling_float32(num, precision);
+        return tiling_float32(num);
     }
     else{
-        return (void *)tiling_float64(num, precision);
+        return tiling_float64(num);
     }
 }
 

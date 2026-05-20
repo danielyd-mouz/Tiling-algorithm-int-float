@@ -7,7 +7,7 @@
 #include <float.h>
 #include "../header/Tiling_function.h"
 
-//Helper function to conver uint64_t value to int64_t value
+//Helper function to calculate the offset for the uniform distribution of values
 static uint64_t uniform_offset(uint64_t max_offset, size_t i, size_t num)
 {
     if (num == 1) {
@@ -15,6 +15,29 @@ static uint64_t uniform_offset(uint64_t max_offset, size_t i, size_t num)
     }
 
     return (uint64_t)(((__uint128_t)max_offset * i) / (num - 1));
+}
+
+// Helper function to help determine of the number is already in the array
+static bool is_in_uarray(uint64_t *array, size_t *length, uint64_t value)
+{
+    for (size_t i = 0; i < *length; i++) {
+        if (array[i] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Helper function to add the value to the array if it is not already in the array
+static void add_to_uarray(uint64_t *array, size_t *length, size_t capacity, uint64_t value)
+{
+    if(*length >= capacity){
+        return;
+    }
+    if (!is_in_uarray(*array, length, value)) {
+        array[*length] = value;
+        (*length)++;
+    }
 }
 
 // Helper function to generate array of samples for unsigned int types
@@ -33,9 +56,37 @@ static uint64_t *unsigned_tiling_int(size_t num, uint32_t precision)
     else{
         max_value = (1ULL << precision) - 1;
     }
-    for(size_t i = 0; i < num; i++){
-        result[i] = uniform_offset(max_value, i, num);
+
+    size_t count = 0;
+
+    //special cases to be considered first
+    add_to_uarray(result, &count, num, 0);
+    add_to_uarray(result, &count, num, max_value);
+
+    add_to_uarray(result, &count, num, 1);
+    add_to_uarray(result, &count, num, max_value - 1);
+    add_to_uarrauy(result, &count, num, max_value / 2);
+
+    for(uint32_t i = 1; i< precision-1 && count < num; i++){
+        uint64_t value = 1ULL << i;
+        add_to_uarray(result, &count, num, value);
+        if(count < num){
+            add_to_uarray(result, &count, num, max_value - value);
+        }
     }
+
+    //places for all remaining values spaced evenly
+    size_t remaining = num - count;
+    for(size_t i = 0; i < remaining; i++){
+        add_to_uarray(result, &count, num, uniform_offset(max_value, i, num));
+    }
+
+    //to fill in any remaining slots if there are duplicates
+    while(count < num){
+        uint64_t value = uniform_offset(max_value, count, num);
+        add_to_uarray(result, &count, num, value);
+    }
+
     return result;
 }
 
@@ -48,6 +99,29 @@ static int64_t signed64_from_offset(uint64_t offset)
         return INT64_MIN + (int64_t)offset;
     } else {
         return (int64_t)(offset - half);
+    }
+}
+
+// Helper function to determine if the number is already in the array
+static bool is_in_iarray(int64_t *array, size_t *length, int64_t value)
+{
+    for (size_t i = 0; i < *length; i++) {
+        if (array[i] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Helper function to add the value to the array if it is not already in the array
+static void add_to_iarray(int64_t *array, size_t *length,size_t capacity, int64_t value)
+{
+    if(*length >= capacity){
+        return;
+    }
+    if (!is_in_iarray(*array, length, value)) {
+        array[*length] = value;
+        (*length)++;
     }
 }
 
@@ -75,9 +149,37 @@ static int64_t *signed_tiling_int(size_t num, uint32_t precision)
     int64_t min_value = -max_value - 1;
     uint64_t max_offset = (uint64_t)(max_value - min_value);
 
-    for (size_t i = 0; i < num; i++) {
+    size_t count = 0;
+    
+    //Special cases to be considered first
+    add_to_iarray(result, &count, num, min_value);
+    add_to_iarray(result, &count, num, max_value);
+    add_to_iarray(result, &count, num, 0);
+    
+    add_to_iarray(result, &count, num, min_value + 1);
+    add_to_iarray(result, &count, num, max_value - 1);
+    add_to_iarray(result, &count, num, max_value / 2);
+
+    for(uint32_t i = 1; i < precision - 1 && count < num; i++){
+        int64_t value = (int64_t)(1ULL << i);
+        add_to_iarray(result, &count, num, value);
+        if(count < num){
+            add_to_iarray(result, &count, num, -value);
+        }
+    }
+
+    //Places for all remaining values spaced evenly
+    size_t remaining = num - count;
+    for (size_t i = 0; i < remaining; i++) {
         uint64_t offset = uniform_offset(max_offset, i, num);
-        result[i] = (int64_t)((__int128_t)min_value + offset);
+        add_to_iarray(result, &count, num, (int64_t)((__int128_t)min_value + offset));
+    }
+
+    //To fill in any remaining slots if there are duplicates
+    while (count < num) {
+        uint64_t offset = uniform_offset(max_offset, count, num);
+        add_to_iarray(result, &count, num, (int64_t)((__int128_t)min_value + offset));
+        count++;
     }
 
     return result;

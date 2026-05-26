@@ -1,0 +1,15 @@
+float with arbitrary mantissa length up to 256 bits of precision:
+Use MPFR library to implement the float with arbitrary mantissa length up to 256 bits of precision.
+If the user does not have MPFR, they can still use the simplified version of the tiling function with float types of 32 and 64 bits of precision.
+
+
+Int with up to 256 bits of precision:
+Use GMP library to implement int with arbitrary bit size that can acheive but not limited to 256 bits of precision.
+If users do not have GMP, they can still use the basic simplified version of the tiling function with sample precision up to 64 bits.
+
+Pros and cons for accomplishing a data type up to 256 bits myself:
+Pros: The data type and its behavior is more controlable. Also, the performance of different operators are also under controlable
+
+Cons: Implementing those datatypes myself is time consuming and requires a lot of time to debug various of boundry cases like overflow. What's more, when comes to float point number implementation, it becomes even more complicated in terms of rounding and ensuring the basic behavior of float point number as expected
+
+So the current version will try to use well-tested GMP and MPFR library to introduce large bit data type.

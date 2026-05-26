@@ -1,50 +1,42 @@
-#ifndef TILING_H
-#define TILING_H
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <float.h>
 #include <limits.h>
 #include <string.h>
 #include <math.h>
+#include <gmp.h>
+#include <mpfr.h>
+/*#include "../header/type.h"
+typedef struct {
+   int8_t _priv[32];  // 256 bits, internal layout is NOT part of the API
+} int256_t;
 
-/*
- generate a tiling function for int type.
+int256_t intadd(int256_t a, int256_t b); // return a+b, if the result exceeds the maximum value of the type, the behavior is undefined
+int256_t intsub(int256_t a, int256_t b); // return a-b, if the result is less than the minimum value of the type, the behavior is undefined
+int256_t intmul(int256_t a, int256_t b); // return a*b, if the result exceeds the maximum value of the type, the behavior is undefined
+int256_t intdiv(int256_t a, int256_t b); // return a/b, if b == 0, the behavior is undefined
+int256_t intexp(int256_t a, int256_t b); // return a^b
+int256_t intcmp(int256_t a, int256_t b); // return -1 if a < b, 0 if a == b, 1 if a > b
+bool int_geq(int256_t a, int256_t b);    // return true if a >= b, false otherwise
+bool int_leq(int256_t a, int256_t b);    // return true if a <= b, false otherwise
+bool int_equal(int256_t a, int256_t b);  // return true if a == b, false otherwise
 
- Input Parameters:
-    - num: the number of samples included in the returned array.
 
-    - precision: the type of int the user is looking for. Power of two sizes between 8 and 64 bits.
 
-    - sign: whether the int type is signed or not. true: signed, false: unsigned.
+typedef struct {
+   uint8_t _priv[32];  // 256 bits, internal layout is NOT part of the API
+} uint256_t;
 
- Output:
-    - a generic pointer containing the type of int the user is looking for.
-*/
-void *tiling_int(size_t num, uint32_t precision, bool sign);
-// REQUIRES: num > 0;
-// REQUIRES: 0<precision && precision <= 64;
-// REQUIRES: precision == 64 ||num <= (size_t)(1<<precision - 1);
-// ENSURES: result != NULL && \length(result) == num;
+uint256_t uintadd(uint256_t a, uint256_t b); // return a+b, if the result exceeds the maximum value of the type, the behavior is undefined
+uint256_t uintsub(uint256_t a, uint256_t b); // return a-b, if a < b, the behavior is undefined
+uint256_t uintmul(uint256_t a, uint256_t b); // return a*b, if the result exceeds the maximum value of the type, the behavior is undefined
+uint256_t uintdiv(uint256_t a, uint256_t b); // return a/b, if b == 0, the behavior is undefined
+uint256_t uintexp(uint256_t a, uint256_t b); // return a^b
+uint256_t uintcmp(uint256_t a, uint256_t b); // return -1 if a < b, 0 if a == b, 1 if a > b
+bool uint_geq(uint256_t a, uint256_t b);     // return true if a >= b, false otherwise
+bool uint_leq(uint256_t a, uint256_t b);     // return true if a <= b, false otherwise
+bool uint_equal(uint256_t a, uint256_t b);   // return true if a == b, false otherwise   */
 
-/*
- generate a tiling function for float type.
-
- Input Parameters:
-    - num: the number of samples included in the returned array.
-
-    - precision: the type of float the user is looking for. 
-                 32->float, 64->double.
-
- Output:
-    - the array with num samples of the designated type.
-*/
-void *tiling_float(size_t num, uint32_t precision);
-// REQUIRES: num > 0;
-// REQUIRES: num <= SIZE_MAX/(precision/8);
-// REQUIRES: precision == 32 || precision == 64;
-// ENSURES: result != NULL && \length(result) == num;
-
-#endif

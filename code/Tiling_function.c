@@ -2,613 +2,601 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <math.h>
-#include <limits.h>
+#include <stdarg.h>
 #include <float.h>
+#include <limits.h>
 #include <string.h>
+#include <math.h>
+#include <gmp.h>
+#include <mpfr.h>
+#include "../header/type.h"
 #include "../header/Tiling_function.h"
 
-//Helper function to calculate the offset for the uniform distribution of values
-static uint64_t uniform_offset(uint64_t max_offset, size_t i, size_t num)
+//Helper functions to do uniform sampling
+void uniform_offset(mpz_t max_offset, mpz_t value, size_t i, size_t num)
 {
     if (num == 1) {
-        return max_offset / 2;
+        mpz_fdiv_q_ui(value, max_offset, 3);
     }
-
-    return (uint64_t)(((__uint128_t)max_offset * i) / (num - 1));
+    mpz_t temp;
+    mpz_init(temp);
+    mpz_mul_ui(temp, max_offset, i);
+    mpz_fdiv_q_ui(value, temp, (num - 1));
+    mpz_clear(temp);
 }
 
-// Helper function to help determine of the number is already in the array
-static bool is_in_uarray(uint64_t *array, size_t *length, uint64_t value)
+// Helper function to add the value to the unsigned int array if it is not already in the unsigned integer array
+void add_to_uarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, uint32_t precision)
 {
-    for (size_t i = 0; i < *length; i++) {
-        if (array[i] == value) {
-            return true;
-        }
+    if(length >= capacity) return;
+    mpz_t max;
+    mpz_t min;
+    mpz_t one;
+    mpz_init2(one, precision+1);
+    mpz_add_ui(one, one, 1);
+    mpz_init2(max, precision+1);
+    mpz_mul_2exp(max, one, precision);
+    mpz_init(min);
+
+    if(mpz_cmp(value, max) >= 0 | mpz_cmp(value,min)<0) return;
+
+    if(!is_in_uarray(array, *length, value)){
+      mpz_set(array[*length],value);
+      *length ++;   
+    }
+
+    mpz_clear(max);
+    mpz_clear(min);
+    mpz_clear(value);
+}
+
+// Helper function to check if the value already exist in the unsigned int array
+bool is_in_uarray(mpz_t *array, size_t length, mpz_t value)
+{
+    for(size_t i = 0; i<length; i++){
+        if(mpz_cmp(value, array[i]) == 0) return true;
     }
     return false;
 }
 
-// Helper function to add the value to the array if it is not already in the array
-static void add_to_uarray(uint64_t *array, size_t *length, size_t capacity, uint64_t value)
+// Helper function to add boundary cases to unsigned int array
+void add_boundtry_ui(size_t num, uint32_t precision, size_t *length, mpz_t *result)
 {
-    if(*length >= capacity){
-        return;
-    }
-    if (!is_in_uarray(array, length, value)) {
-        array[*length] = value;
-        (*length)++;
-    }
+    mpz_t max;
+    mpz_t min;
+    mpz_t max_oneless;
+    mpz_t min_onemore;
+    mpz_t half;
+    mpz_t one;
+    mpz_init2(one, precision + 1);
+    mpz_set_ui(one, 1);
+    mpz_init2(max, precision+1);
+    mpz_init2(min, precision+1);
+    mpz_init2(max_oneless, precision+1);
+    mpz_init2(min_onemore, precision+1);
+    mpz_mul_2exp(max, one, precision);
+    mpz_sub_ui(max, max, 1);
+    mpz_sub_ui(max_oneless, max, 1);
+    mpz_add_ui(min_onemore, min, 0);
+    mpz_fdiv_q_ui(half, max, 2);
+    add_to_uarray(result, &length, num, max, precision);
+    add_to_uarray(result, &length, num, min, precision);
+    add_to_uarray(result, &length, num, max_oneless, precision);
+    add_to_uarray(result, &length, num, min_onemore, precision);
+    add_to_uarray(result, &length, num, half, precision);
+    mpz_clear(max);
+    mpz_clear(min);
+    mpz_clear(max_oneless);
+    mpz_clear(min_onemore);
+    mpz_clear(half);
 }
 
-// Helper function to generate array of samples for unsigned int types
-static uint64_t *unsigned_tiling_int(size_t num, uint32_t precision)
-// REQUIRES: num > 0;
-// REQUIRES: precision <=64;
-// num <= number of available values for the specified precision;
-// ENSURES: result != NULL && \length(result) == num;
+// Sub-tiling function for unsigned int
+void unsigned_tiling_int(size_t num, uint32_t precision, mpz_t *result)
 {
-    uint64_t *result = xcalloc(num,sizeof(uint64_t));
-    uint64_t max_value;
-
-    if(precision == 64){
-        max_value = UINT64_MAX;
-    }
-    else{
-        max_value = (1ULL << precision) - 1;
-    }
-
-    size_t count = 0;
-
-    //special cases to be considered first
-    add_to_uarray(result, &count, num, 0);
-    add_to_uarray(result, &count, num, max_value);
-
-    add_to_uarray(result, &count, num, 1);
-    add_to_uarray(result, &count, num, max_value - 1);
-    add_to_uarray(result, &count, num, max_value / 2);
-
-    for(uint32_t i = 1; i< precision && count < num; i++){
-        uint64_t value = 1ULL << i;
-        add_to_uarray(result, &count, num, value);
-
-        if(count < num){
-            add_to_uarray(result, &count, num, max_value - value);
-        }
-    }
-
-    //places for all remaining values spaced evenly
-    size_t remaining = num - count;
-    for(size_t i = 0; i < remaining; i++){
-        add_to_uarray(result, &count, num, uniform_offset(max_value, i, num));
-    }
-
-    //to fill in any remaining slots if there are duplicates
-    size_t index = 0;
-    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
-    while(count < num && index < max_attempts){ // limit the number of attempts to avoid infinite loop
-        uint64_t value = uniform_offset(max_value, index, max_attempts);
-        add_to_uarray(result, &count, num, value);
-        index ++;
-    }
-
-    uint64_t val = 0;
-    while(count < num && val <= max_value){ // fill in any remaining slots with sequential values
-        add_to_uarray(result, &count, num, val);
-        if(val == max_value){
-            break;
-        }
-        val++;
-    }
-
-    return result;
-}
-
-// Helper function to determine if the number is already in the array
-static bool is_in_iarray(int64_t *array, size_t *length, int64_t value)
-{
-    for (size_t i = 0; i < *length; i++) {
-        if (array[i] == value) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Helper function to add the value to the array if it is not already in the array
-static void add_to_iarray(int64_t *array, size_t *length,size_t capacity, int64_t value)
-{
-    if(*length >= capacity){
-        return;
-    }
-    if (!is_in_iarray(array, length, value)) {
-        array[*length] = value;
-        (*length)++;
-    }
-}
-
-// Helper function to generate array of samples for signed int types
-static int64_t *signed_tiling_int(size_t num, uint32_t precision)
-{
-    int64_t *result = xcalloc(num, sizeof(int64_t));
+    //initialize common numbers
+    mpz_t max;
+    mpz_t min;
+    mpz_t one;
+    mpz_init2(one, precision + 1);
+    mpz_set_ui(one, 1);
+    mpz_init2(max, precision+1);
+    mpz_init2(min, precision+1);
+    mpz_mul_2exp(max, one, precision);
+    mpz_sub_ui(max, max, 1);
 
     if (num == 1) {
-        result[0] = 0;
+        mpz_init2(result[0],precision);
         return result;
     }
 
-    uint64_t magnitude;
-    int64_t max_value;
-    int64_t min_value;
-    uint64_t max_offset;
+    size_t count = 0;
+    
+    add_boundtry_ui(num, precision, &count, result);
 
-    if (precision == 64) {
-        magnitude = 1ULL << 63;
-        max_value = INT64_MAX;
-        min_value = INT64_MIN;
-        max_offset = UINT64_MAX;
-    }else{
-        magnitude = 1ULL << (precision - 1);
-        max_value = (int64_t)(magnitude - 1);
-        min_value = -max_value - 1;
-        max_offset = (uint64_t)(max_value - min_value);
+    if(count == num) return;
+    
+    for(uint32_t i = 1; i< precision && count < num; i++){
+        mpz_t temp;
+        mpz_init2(temp, precision);
+        mpz_mul_2exp(temp,one,i);
+        add_to_uarray(result, num, &count, temp, precision);
+
+        if(count < num){
+            mpz_t comp;
+            mpz_init2(comp, precision);
+            mpz_sub(comp, max, temp);
+            add_to_uarray(result, num, &count, comp, precision);
+            mpz_clear(comp);
+            mpz_clear(temp);
+        }
+        else{
+            mpz_clear(temp);
+            break;
+        }
+    }
+
+    mpz_t v;
+    mpz_init2(v, precision);
+
+    //Use uniform sampling to fill in the slot
+    size_t remaining = num - count;
+    for(size_t i = 0; i < remaining; i++){
+        uniform_offset(max, v, i, num);
+        add_to_uarray(result, &count, num, v, precision);
+    }
+
+    //Try to fill in the remaining slots with more uniform sampling
+    size_t index = 0;
+    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2; // to avoid overflow and limit the number of attempts
+    while(count < num && index < max_attempts){                    // limit the number of attempts to avoid infinite loop
+        uniform_offset(max, v, index, num);
+        add_to_uarray(result, &count, num, v,precision);
+        index ++;
+    }
+
+    //sequential values to fall back
+    mpz_t iterate;
+    mpz_init2(iterate,precision);
+    while(count < num && mpz_cmp(iterate,max)<0){
+        add_to_uarray(result, &count, num, iterate,precision);
+        mpz_add_ui(iterate,iterate,1);
+    }
+    mpz_clear(max);
+    mpz_clear(min);
+    mpz_clear(one);
+    mpz_clear(iterate);
+    mpz_clear(v);
+}
+
+//Helper function to add the value to the signed int array
+void add_to_iarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, uint32_t precision)
+{
+    if(length >= capacity) return;
+    mpz_t max;
+    mpz_t min;
+    mpz_t one;
+    mpz_t neg_one;
+    mpz_init2(one, precision);
+    mpz_init2(neg_one, precision);
+    mpz_add_ui(one, one, 1);
+    mpz_sub(neg_one, neg_one, one);
+    mpz_init2(max, precision);
+    mpz_mul_2exp(max, one, precision-1);
+    mpz_init(min);
+    mpz_mul_2exp(min, neg_one, precision-1);
+
+    if(mpz_cmp(value, max) >= 0 | mpz_cmp(value,min)<0) return;
+
+    if(!is_in_uarray(array, *length, value)){
+      mpz_set(array[*length],value);
+      *length ++;   
+    }
+
+    mpz_clear(max);
+    mpz_clear(min);
+    mpz_clear(one);
+    mpz_clear(neg_one);
+    mpz_clear(value);
+}
+
+// Helper function to check if the value already exist in the signed array
+bool is_in_iarray(mpz_t *array, size_t length, mpz_t value)
+{
+    for(size_t i = 0; i<length; i++){
+        if(mpz_cmp(value, array[i]) == 0) return true;
+    }
+    return false;
+}
+
+// Helper function to add boundary cases
+void add_boundtry_si(size_t num, uint32_t precision, size_t *length, mpz_t *result)
+{
+    mpz_t max;
+    mpz_t min;
+    mpz_t max_oneless;
+    mpz_t min_onemore;
+    mpz_t half;
+    mpz_t one;
+    mpz_t max_half;
+    mpz_t min_half;
+    mpz_t neg_one;
+    mpz_init2(one, precision + 1);
+    mpz_init2(max_half,precision);
+    mpz_init2(min_half, precision);
+    mpz_init2(neg_one, precision);
+    mpz_set_ui(one, 1);
+    mpz_sub(neg_one, neg_one, one);
+    mpz_init2(max, precision+1);
+    mpz_init2(min, precision+1);
+    mpz_init2(max_oneless, precision+1);
+    mpz_init2(min_onemore, precision+1);
+    mpz_mul_2exp(max, one, precision-1);
+    mpz_sub(min, min, max);
+    mpz_sub_ui(max, max, 1);
+    mpz_sub_ui(max_oneless, max, 1);
+    mpz_add_ui(min_onemore, min, 0);
+    mpz_fdiv_q_ui(max_half, max, 2);
+    mpz_fdiv_q_ui(min_half, min, 2);
+
+    add_to_uarray(result, &length, num, max, precision);
+    add_to_uarray(result, &length, num, min, precision);
+    add_to_uarray(result, &length, num, max_oneless, precision);
+    add_to_uarray(result, &length, num, min_onemore, precision);
+    add_to_uarray(result, &length, num, max_half, precision);
+    add_to_uarray(result, &length, num, min_half, precision);
+    add_to_uarray(result, &length, num, one, precision);
+    add_to_uarray(result, &length, num, neg_one, precision);
+    mpz_clear(max);
+    mpz_clear(min);
+    mpz_clear(max_oneless);
+    mpz_clear(min_onemore);
+    mpz_clear(min_half);
+    mpz_clear(max_half);
+    mpz_clear(one);
+    mpz_clear(neg_one);
+}
+
+// sub-tiling function for signed int
+void signed_tiling_int(size_t num, uint32_t precision, mpz_t *result)
+{
+    //initialize common numbers
+    mpz_t max;
+    mpz_t min;
+    mpz_t one;
+    mpz_t max_offset;
+    
+    mpz_init2(one, precision + 1);
+    mpz_set_ui(one, 1);
+    mpz_init2(max, precision);
+    mpz_init2(min, precision);
+    mpz_mul_2exp(max, one, precision-1);
+    mpz_sub(min, min, max);
+    mpz_sub_ui(max, max, 1);
+    mpz_init2(max_offset,precision+1);
+    mpz_mul_2exp(max_offset, one, precision);
+    mpz_sub(max_offset, max_offset, one);
+
+    if (num == 1) {
+        mpz_init2(result[0],precision);
+        return result;
     }
 
     size_t count = 0;
     
-    //Special cases to be considered first
-    add_to_iarray(result, &count, num, min_value);
-    add_to_iarray(result, &count, num, max_value);
-    add_to_iarray(result, &count, num, 0);
+    add_boundtry_si(num, precision, &count, result);
 
-    add_to_iarray(result, &count, num, -1);
-    add_to_iarray(result, &count, num, 1);
+    if(count == num) return;
     
-    add_to_iarray(result, &count, num, min_value + 1);
-    add_to_iarray(result, &count, num, max_value - 1);
-    add_to_iarray(result, &count, num, max_value / 2);
+    for(uint32_t i = 1; i+1 < precision && count < num; i++){
+        mpz_t temp;
+        mpz_init2(temp, precision);
+        mpz_mul_2exp(temp,one,i);
+        add_to_iarray(result, num, &count, temp, precision);
 
-    for(uint32_t i = 1; i +1 < precision && count < num; i++){
-        int64_t value = (int64_t)(1ULL << i);
-        add_to_iarray(result, &count, num, value);
         if(count < num){
-            add_to_iarray(result, &count, num, -value);
+            mpz_t comp;
+            mpz_init2(comp, precision);
+            mpz_sub(comp, comp, temp);
+            add_to_uarray(result, num, &count, comp, precision);
+            mpz_clear(comp);
+            mpz_clear(temp);
         }
-    }
-
-    //Places for all remaining values spaced evenly
-    size_t remaining = num - count;
-    for (size_t i = 0; i < remaining; i++) {
-        uint64_t offset = uniform_offset(max_offset, i, num);
-        add_to_iarray(result, &count, num, (int64_t)((__int128_t)min_value + offset));
-    }
-
-    //To fill in any remaining slots if there are duplicates
-    size_t index = 0;
-    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
-    while (count < num && index < max_attempts) { // limit the number of attempts to avoid infinite loop
-        uint64_t offset = uniform_offset(max_offset, index, max_attempts);
-        add_to_iarray(result, &count, num, (int64_t)((__int128_t)min_value + offset));
-        index++;
-    }
-
-    int64_t val = min_value;
-    while (count < num && val <= max_value) { // fill in any remaining slots with sequential values
-        add_to_iarray(result, &count, num, val);
-        if (val == max_value) {
+        else{
+            mpz_clear(temp);
             break;
         }
-        val++;
     }
 
-    return result;
+    mpz_t v;
+    mpz_init2(v, precision);
+
+    //Use uniform sampling to fill in the slot
+    size_t remaining = num - count;
+    for(size_t i = 0; i < remaining; i++){
+        uniform_offset(max_offset, v, i, num);
+        mpz_add(v, v, min);
+        add_to_uarray(result, &count, num, v, precision);
+    }
+
+    //Try to fill in the remaining slots with more uniform sampling
+    size_t index = 0;
+    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2; // to avoid overflow and limit the number of attempts
+    while(count < num && index < max_attempts){                    // limit the number of attempts to avoid infinite loop
+        uniform_offset(max_offset, v, index, num);
+        mpz_add(v, v, min);
+        add_to_uarray(result, &count, num, v,precision);
+        index ++;
+    }
+
+    //sequential values to fall back
+    mpz_t iterate;
+    mpz_init2(iterate,precision);
+    mpz_set(iterate,min);
+    while(count < num && mpz_cmp(iterate,max)<0){
+        add_to_uarray(result, &count, num, iterate,precision);
+        mpz_add_ui(iterate,iterate,1);
+    }
+    mpz_clear(max);
+    mpz_clear(min);
+    mpz_clear(one);
+    mpz_clear(iterate);
+    mpz_clear(v);
+    mpz_clear(max_offset);
 }
 
-//return a generic pointer containing the type of int the user is looking for. 
-//The caller can cast the pointer to the correct type based on the input parameters.
-void *tiling_int(size_t num, uint32_t precision, bool sign)
+// Tiling function for mpz_t
+void tiling_int(mpz_t *arr, size_t num, uint32_t precision, bool sign)
 // REQUIRES: num > 0;
-// REQUIRES: 0<precision && precision <= 64;
-// REQUIRES: num <= number of representable values for the specified precision;
+// REQUIRES: arr == NULL;
+// REQUIRES: 0 < precision && precision <= 256;
+// REQUIRES: preision > 64 || num <= (size_t)(1ULL << precision - 1);
 // ENSURES: result != NULL && \length(result) == num;
 {
     // Validate input parameters
-    if(precision == 0 || precision > 64){
-        printf("Precision input must be between 1 and 64.\n");
-        return NULL;
+    if(precision == 0 || precision > 256){
+        printf("Precision input must be between 1 and 256.\n");
+        return;
     }
     if (num == 0) {
         printf("Number of samples must be greater than 0.\n");
-        return NULL;
+        return;
     }
-    if (precision < sizeof(size_t) * CHAR_BIT) {
-        size_t max_samples = ((size_t)1) << precision;
-        
-        if (num > max_samples) {
-            printf("Number of samples exceeds number of available values.\n");
-            return NULL;
-        }
+
+    // Check if the number of samples exceeds the number of available values for the specified precision
+    mpz_t max_samples;
+    mpz_t base;
+    mpz_init2(base, 256);
+    mpz_mul_2exp (max_samples, base, precision);
+    if (mpz_cmp(num, max_samples) > 0) {
+        printf("Number of samples exceeds number of available values.\n");
+        mpz_clear(max_samples);
+        mpz_clear(base);
+        return;
     }
-    if(num > SIZE_MAX/sizeof(uint64_t)){
+
+    // Check for potential overflow when allocating memory
+    if(num > SIZE_MAX/sizeof(mpz_t)){
         printf("Number of samples exceeds the maximum allowed.\n");
-        return NULL;
-    } 
+        mpz_clear(max_samples);
+        mpz_clear(base);
+        return;
+    }
+    mpz_clear(max_samples);
+    mpz_clear(base);
+    arr = xmalloc(num*sizeof(mpz_t));
 
     // Call the appropriate helper function based on the sign parameter
     if(!sign){
-        return (void *)unsigned_tiling_int(num, precision);
+        unsigned_tiling_int(num, precision, arr);
+        return;
     }
     else{
-        return (void *)signed_tiling_int(num, precision);
+        signed_tiling_int(num, precision, arr);
+        return;
     }
+
+
 }
 
-/*----------------------------------------------------------------------------------------------------------
-float types tiling function. The function will return an array of samples for the specified precision (32 or 64 bits).
-----------------------------------------------------------------------------------------------------------*/
-
-//comparing two float numbers in bit level
-static bool float_equal(float a, float b)
+// Helper function to clear the signed mpz_t array
+void clear_iarray(mpz_t *array, size_t num)
+// REQUIRES: array != NULL;
+// REQUIRES: num = \length(array);
 {
-    uint32_t a_bits, b_bits;
-    memcpy(&a_bits, &a, sizeof(float));
-    memcpy(&b_bits, &b, sizeof(float));
-    return a_bits == b_bits;
+    for(size_t i = 0; i<num; i++){
+        mpz_clear(array[i]);
+    }
+    free(array);
 }
 
-// Helper function to determine if the number is already in the float array
-static bool is_in_farray(float *array, size_t *length, float value)
+// Helper function to check if the value already exist in the mpfr_t array
+bool is_in_farray(mpfr_t *array, size_t length, mpfr_t value)
 {
-    for (size_t i = 0; i < *length; i++) {
-        if (float_equal(array[i], value)) {
+    for (size_t i = 0; i < length; i++) {
+        if (mpfr_cmp(array[i], value) == 0) {
             return true;
         }
     }
     return false;
 }
 
-// Helper function to add the value to the array if it is not already in the float array
-static void add_to_farray(float *array, size_t *length,size_t capacity, float value)
+// Helper function to add the value to the array if it is not already in the mpfr_t array
+void add_to_farray(mpfr_t *array, size_t *length, size_t capacity, mpfr_t value, mpfr_t max, mpfr_t min, mpfr_rnd_t rnd)
 {
-    if(*length >= capacity){
+    if(length >= capacity) return;
+
+    if(mpfr_cmp(value, max) > 0) return;
+    if(mpfr_cmp(value, min) < 0) return;
+
+    if(!is_in_farray(array, *length, value)){
+      mpfr_set(array[*length],value, rnd);
+      *length ++;   
+    }
+}
+
+// Helper function to add boundary cases
+void add_boundary_f(size_t num, mpfr_prec_t precision, mpfr_prec_t mantissa, size_t *length, mpfr_t *result, mpfr_rnd_t rnd)
+{
+    mpfr_t max;
+    mpfr_t min;
+    mpfr_t max_less;
+    mpfr_t min_more;
+    mpfr_t max_half;
+    mpfr_t min_half;
+    mpfr_init2(max, mantissa);
+    mpfr_init2(min, mantissa);
+    mpfr_init2(max_less, mantissa);
+    mpfr_init2(min_more, mantissa);
+    mpfr_init2(max_half, mantissa);
+    mpfr_init2(min_half, mantissa);
+    mpfr_set_ui(max, 1, rnd);
+    mpfr_div_2ui(max, max, mantissa, rnd);
+    mpfr_ui_sub(max, 1, max, rnd);
+    mpfr_mul_2si(max, max, precision - 1 - mantissa, rnd);
+    mpfr_sub(min, min, max,rnd);
+
+    add_to_farray(result, &length, num, max, max, min, rnd);
+    add_to_farray(result, &length, num, min, max, min, rnd);
+    mpfr_set(max_less, max, rnd);
+    mpfr_set(min_more, min, rnd);
+    mpfr_nextbelow(max_less);
+    mpfr_nextabove(min_more);
+    add_to_farray(result, &length,num,max_less,max,min,rnd);
+    add_to_farray(result,&length,num,min_more,max,min,rnd);
+    mpfr_div_ui(max_half,max , 2 ,rnd);
+    add_to_farray(result,&length,num,max_half,max,min,rnd);
+    mpfr_div_ui(min_half,min , 2 ,rnd);
+    add_to_farray(result,&length,num,min_half,max,min,rnd);
+
+}
+
+// Helper functions to perform uniform sampling for mpfr_t type
+void uniform_offset_f(mpfr_t max_offset, mpfr_t value, size_t i, size_t num, mpfr_rnd_t rnd)
+{
+    if (num == 1) {
+        mpfr_div_ui(value, max_offset, 3, rnd);
         return;
     }
-    if (!is_in_farray(array, length, value)) {
-        array[*length] = value;
-        (*length)++;
-    }
+    mpfr_t temp;
+    mpfr_init(temp);
+    mpfr_mul_ui(temp, max_offset, i, rnd);
+    mpfr_div_ui(value, temp, (num - 1), rnd);
+    mpfr_clear(temp);
 }
 
-static float float_from_bits(uint32_t bits)
-{
-    float value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-static void fill_float32_by_bits(float *result, size_t *count, size_t capacity)
-{
-    uint32_t max_positive_finite_bits = 0x7F7FFFFFu;
-
-    size_t remaining = capacity - *count;
-    size_t max_attempts = remaining > SIZE_MAX / 4 ? SIZE_MAX : remaining * 4;
-
-    if (max_attempts < 2) {
-        max_attempts = 2;
-    }
-
-    // First: representation-space uniform samples
-    for (size_t i = 0; *count < capacity && i < max_attempts; i++) {
-        uint32_t bits =
-            (uint32_t)uniform_offset(max_positive_finite_bits, i, max_attempts);
-
-        add_to_farray(result, count, capacity, float_from_bits(bits));
-
-        if (*count < capacity) {
-            add_to_farray(result, count, capacity,
-                          float_from_bits(bits | 0x80000000u));
-        }
-    }
-
-    // Second: sequential bit-pattern fallback
-    for (uint32_t bits = 0; *count < capacity; bits++) {
-        add_to_farray(result, count, capacity, float_from_bits(bits));
-
-        if (*count < capacity) {
-            add_to_farray(result, count, capacity,
-                          float_from_bits(bits | 0x80000000u));
-        }
-
-        if (bits == max_positive_finite_bits) {
-            break;
-        }
-    }
-}
-
-// Helper function that return an array of samples for float32 type.
-static float *tiling_float32(size_t num)
+// Body of the tiling function for float types
+void tiling_float(mpfr_t *arr, size_t num, mpfr_prec_t precision, mpfr_prec_t mantissa, mpfr_rnd_t *rnd)
 // REQUIRES: num > 0;
-// REQUIRES: precision == 32;
-// REQUIRES num <= number of available values for the specified precision;
+// REQUIRES: num <= SIZE_MAX/(sizeof(mpfr_t));
+// REQUIRES: arr == NULL;
+// REQUIRES: precision >= 0 && precision <= 256;
 // ENSURES: result != NULL && \length(result) == num;
 {
-    if(num > SIZE_MAX/sizeof(float)){
-        printf("Number of samples exceeds the maximum allowed for float type.\n");
-        return NULL;
+    if(rnd == NULL){
+        *rnd = MPFR_RNDN;
     }
-
-    int min_exp = FLT_MIN_EXP - FLT_MANT_DIG;
-    int max_exp = FLT_MAX_EXP - 1;
-    int exp_range = max_exp - min_exp;
-
-    float *result = xcalloc(num,sizeof(float));
-
-    if(num == 1){
-        result[0] = 1.0f;
-        return result;
-    }
-
-    
-    size_t count = 0;
-
-    //Special cases to be considered first
-    add_to_farray(result, &count, num, 0.0f);
-    add_to_farray(result, &count, num, -0.0f);
-
-    add_to_farray(result, &count, num, 1.0f);
-    add_to_farray(result, &count, num, -1.0f);
-    add_to_farray(result, &count, num, 0.5f);
-    add_to_farray(result, &count, num, -0.5f);
-
-    add_to_farray(result, &count, num, FLT_EPSILON);
-    add_to_farray(result, &count, num, -FLT_EPSILON);
-    add_to_farray(result, &count, num, 1.0f + FLT_EPSILON);
-    add_to_farray(result, &count, num, -(1.0f + FLT_EPSILON));
-
-    add_to_farray(result, &count, num, FLT_MAX);
-    add_to_farray(result, &count, num, -FLT_MAX);
-    add_to_farray(result, &count, num, nextafterf(FLT_MAX, 0.0f));
-    add_to_farray(result, &count, num, nextafterf(-FLT_MAX, 0.0f));
-
-    add_to_farray(result, &count, num, FLT_MIN);
-    add_to_farray(result, &count, num, -FLT_MIN);
-    add_to_farray(result, &count, num, nextafterf(FLT_MIN, 0.0f));
-    add_to_farray(result, &count, num, nextafterf(-FLT_MIN, 0.0f));
-
-    add_to_farray(result, &count, num, nextafterf(0.0f, 1.0f));
-    add_to_farray(result, &count, num, nextafterf(0.0f, -1.0f));
-
-    //Places for all remaining values spaced evenly
-    size_t num_pair = (num - count + 1) / 2;
-
-    for(size_t i = 0; i<num_pair && count < num; i++){
-        int exp;
-        if(num_pair == 1){
-            exp = 0;
-        }
-        else{
-            exp = min_exp + (int)(((__uint128_t)i * exp_range) / (num_pair - 1));
-        }
-        add_to_farray(result, &count, num, ldexpf(1.0f, exp));
-
-        if(count < num){
-            add_to_farray(result, &count, num, -ldexpf(1.0f, exp));
-        }
-    }
-
-    //To fill in any remaining slots if there are duplicates
-    size_t index = 0;
-    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
-    while(count < num && index < max_attempts){ // limit the number of attempts to avoid infinite loop
-        int exp = min_exp + uniform_offset(exp_range, index, max_attempts);
-        add_to_farray(result, &count, num, ldexpf(1.0f, exp));
-        if(count < num){
-            add_to_farray(result, &count, num, -ldexpf(1.0f, exp));
-        }
-        index ++;
-    }
-
-    // If there are still remaining slots, fill them with sequential values
-    fill_float32_by_bits(result, &count, num);
-
-    if (count < num) {
-        printf("Failed to generate enough unique float32 samples.\n");
-        free(result);
-        return NULL;
-    }
-
-    return result;
-}
-
-//comparing two double numbers in bit level
-static bool double_equal(double a, double b)
-{
-    uint64_t a_bits, b_bits;
-    memcpy(&a_bits, &a, sizeof(double));
-    memcpy(&b_bits, &b, sizeof(double));
-    return a_bits == b_bits;
-}
-//Helper function to determine if the number is already in the double array
-static bool is_in_darray(double *array, size_t *length, double value)
-{
-    for (size_t i = 0; i < *length; i++) {
-        if (double_equal(array[i], value)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Helper function to add the value to the array if it is not already in the double array
-static void add_to_darray(double *array, size_t *length,size_t capacity, double value)
-{
-    if(*length >= capacity){
+    if(precision == 0 || precision > 256){
+        printf("Precision input must be between 1 and 256.\n");
         return;
     }
-    if (!is_in_darray(array, length, value)) {
-        array[*length] = value;
-        (*length)++;
-    }
-}
 
-static double double_from_bits(uint64_t bits)
-{
-    double value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-static void fill_float64_by_bits(double *result, size_t *count, size_t capacity)
-{
-    uint64_t max_positive_finite_bits = 0x7FEFFFFFFFFFFFFFULL;
-
-    size_t remaining = capacity - *count;
-    size_t max_attempts = remaining > SIZE_MAX / 4 ? SIZE_MAX : remaining * 4;
-
-    if (max_attempts < 2) {
-        max_attempts = 2;
-    }
-
-    // First: representation-space uniform samples
-    for (size_t i = 0; *count < capacity && i < max_attempts; i++) {
-        uint64_t bits =
-            uniform_offset(max_positive_finite_bits, i, max_attempts);
-
-        add_to_darray(result, count, capacity, double_from_bits(bits));
-
-        if (*count < capacity) {
-            add_to_darray(result, count, capacity,
-                          double_from_bits(bits | 0x8000000000000000ULL));
-        }
-    }
-
-    // Second: sequential bit-pattern fallback
-    for (uint64_t bits = 0; *count < capacity; bits++) {
-        add_to_darray(result, count, capacity, double_from_bits(bits));
-
-        if (*count < capacity) {
-            add_to_darray(result, count, capacity,
-                          double_from_bits(bits | 0x8000000000000000ULL));
-        }
-
-        if (bits == max_positive_finite_bits) {
-            break;
-        }
-    }
-}
-
-// Helper function that return an array of samples for float64 type.
-static double *tiling_float64(size_t num)
-// REQUIRES: num > 0;
-// REQUIRES: precision == 64;
-// REQUIRES num <= number of available values for the specified precision;
-// ENSURES: result != NULL && \length(result) == num;
-{
-    if(num > SIZE_MAX/sizeof(double)){
-        printf("Number of samples exceeds the maximum allowed for float type.\n");
-        return NULL;
-    }
-
-    int min_exp = DBL_MIN_EXP - DBL_MANT_DIG;
-    int max_exp = DBL_MAX_EXP - 1;
-    int exp_range = max_exp - min_exp;
-
-    double *result = xcalloc(num,sizeof(double));
-
-    if(num == 1){
-        result[0] = 1.0;
-        return result;
-    }
-
-    size_t count = 0;
-    //Special cases to be considered first
-    add_to_darray(result, &count, num, 0.0);
-    add_to_darray(result, &count, num, -0.0);
-    add_to_darray(result, &count, num, 1.0);
-    add_to_darray(result, &count, num, -1.0);
-    add_to_darray(result, &count, num, 0.5);
-    add_to_darray(result, &count, num, -0.5);
-
-    add_to_darray(result, &count, num, DBL_EPSILON);
-    add_to_darray(result, &count, num, -DBL_EPSILON);
-    add_to_darray(result, &count, num, 1.0 + DBL_EPSILON);
-    add_to_darray(result, &count, num, -(1.0 + DBL_EPSILON));
-
-    add_to_darray(result, &count, num, DBL_MAX);
-    add_to_darray(result, &count, num, -DBL_MAX);
-    add_to_darray(result, &count, num, nextafter(DBL_MAX, 0.0));
-    add_to_darray(result, &count, num, nextafter(-DBL_MAX, 0.0));
-
-    add_to_darray(result, &count, num, DBL_MIN);
-    add_to_darray(result, &count, num, -DBL_MIN);
-    add_to_darray(result, &count, num, nextafter(DBL_MIN, 0.0));
-    add_to_darray(result, &count, num, nextafter(-DBL_MIN, 0.0));
-
-    add_to_darray(result, &count, num, nextafter(0.0, 1.0));
-    add_to_darray(result, &count, num, nextafter(0.0, -1.0));
-
-    //Places for all remaining values spaced evenly
-
-    size_t num_pair = ((num-count) + 1) / 2;
-    for(size_t i = 0; i<num_pair && count < num; i++){
-        int exp = 0;
-        if(num_pair > 1){
-            exp = min_exp + (int)(((__uint128_t)i * exp_range) / (num_pair - 1));
-        }
-
-        add_to_darray(result, &count, num, ldexp(1.0, exp));
-
-        if(count < num){
-            add_to_darray(result, &count, num, -ldexp(1.0, exp));
-        }
-    }
-
-    size_t index = 0;
-    size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2;
-    while(count < num && index < max_attempts){ // limit the number of attempts to avoid infinite loop
-        int exp = min_exp + uniform_offset(exp_range, index, max_attempts);
-        add_to_darray(result, &count, num, ldexp(1.0, exp));
-        if(count < num){
-            add_to_darray(result, &count, num, -ldexp(1.0, exp));
-        }
-        index ++;
-    }
-
-    // If there are still remaining slots, fill them with sequential values
-    fill_float64_by_bits(result, &count, num);
-
-    if (count < num) {
-        printf("Failed to generate enough unique float64 samples.\n");
-        free(result);
-        return NULL;
-    }
-
-    return result;
-}
-
-//return a generic pointer containing the type of float the user is looking for. 
-//The caller can cast the pointer to the correct type based on the input parameters.
-void *tiling_float(size_t num, uint32_t precision)
-// REQUIRES: num > 0;
-// REQUIRES: precision == 32 || precision == 64;
-// ENSURES: result != NULL && \length(result) == num;
-{
-    // Validate input parameters
-    if(precision != 32 && precision != 64){
-        printf("Invalid precision input. Please input 32 or 64 for precision.\n");
-        return NULL;
-    }
-    if(num == 0){
+    if (num == 0) {
         printf("Number of samples must be greater than 0.\n");
-        return NULL;
+        return;
     }
 
-    // Call the appropriate helper function based on the precision parameter
-    if(precision == 32){
-        return tiling_float32(num);
+    if(num > SIZE_MAX/sizeof(mpfr_t)){
+        printf("Number of samples exceeds the maximum allowed for float type.\n");
+        return;
     }
-    else{
-        return tiling_float64(num);
+
+
+    mpfr_t *result = xmalloc(num*sizeof(mpfr_t));
+
+    mpfr_t max;
+    mpfr_t min;
+    mpfr_init2(min, mantissa);
+    mpfr_prec_t n = mantissa;
+    mpfr_prec_t exp = precision -1 - mantissa;
+    mpfr_init2(max, mantissa);
+    mpfr_div_2ui(max, max, n, *rnd);
+    mpfr_ui_sub(max, 1, max, *rnd);
+    mpfr_mul_2si(max, max, exp, *rnd);
+    mpfr_sub(min, min, max,*rnd);
+
+    if(num == 1){
+        mpfr_init2(result[0], mantissa);
+        mpfr_set_ui(result[0], 1, *rnd);
+        return;
     }
+
+    size_t count = 0;
+    //Special cases to be considered first
+    mpfr_t zero;
+    mpfr_init2(zero, mantissa);
+    mpfr_set_ui(zero, 0, *rnd);
+    add_to_farray(result, &count, num, zero, max, min, *rnd);
+    add_boundary_f(num, precision, mantissa, &count, result, *rnd);
+
+    //Place numbers with uniform exponent distribution
+    mpfr_t exp2;
+    mpfr_init2(exp2, mantissa);
+    mpfr_set_ui(exp2, 1, *rnd);
+    while(count < num && mpfr_cmp(exp2, max) <= 0){
+        add_to_farray(result, &count, num, exp2, max, min, *rnd);
+        if(count < num){
+            mpfr_neg(exp2, exp2, *rnd);
+            add_to_farray(result, &count, num, exp2, max, min, *rnd);
+        }
+        mpfr_mul_2ui(exp2, exp2, 1, *rnd);
+    }
+    mpfr_clear(exp2);
+
+    //Places for all remaining values spaced evenly
+    size_t num_pair = ((num-count) + 1) / 2;
+    mpfr_t temp;
+    mpfr_init2(temp, mantissa);
+    if(num_pair > 1){
+        for(size_t i = 0; i<num_pair && count < num; i++){
+            uniform_offset_f(max, temp, i, num_pair, *rnd);
+            add_to_farray(result, &count, num, temp, max, min, *rnd);
+            if(count < num){
+                mpfr_neg(temp, temp, *rnd);
+                add_to_farray(result, &count, num, temp, max, min, *rnd);
+            }
+        }
+    }
+    mpfr_clear(temp);
+
+    //Fill in the array with numbers starting from 0 and increasing by a small step until the array is full
+    mpfr_t step;
+    mpfr_init2(step, mantissa);
+    mpfr_set_zero(step, *rnd);
+    while(count < num && mpfr_cmp(step, max) <= 0){
+        add_to_farray(result, &count, num, step, max, min, *rnd);
+        if(count < num){
+            mpfr_neg(step, step, *rnd);
+            add_to_farray(result, &count, num, step, max, min, *rnd);
+        }
+        mpfr_nextafter(step, step, *rnd);
+    }
+    mpfr_clear(step);
+
+
+    mpfr_clear(max);
+    mpfr_clear(min);
+    mpfr_free_pool();
+    mpfr_free_cache();
 }
 
+// Helper function to clear the mpfr_t array
+void clear_farray(mpfr_t *array, size_t num)
+// REQUIRES: array != NULL;
+// REQUIRES: num = \length(array);
+{
+    for(size_t i = 0; i<num; i++){
+        mpfr_clear(array[i]);
+    }
+    free(array);
+}

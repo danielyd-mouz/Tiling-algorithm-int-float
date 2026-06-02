@@ -13,3 +13,6 @@ Pros: The data type and its behavior is more controlable. Also, the performance 
 Cons: Implementing those datatypes myself is time consuming and requires a lot of time to debug various of boundry cases like overflow. What's more, when comes to float point number implementation, it becomes even more complicated in terms of rounding and ensuring the basic behavior of float point number as expected
 
 So the current version will try to use well-tested GMP and MPFR library to introduce large bit data type.
+
+Since mpfr_t library does not support bit-level copy, I'll need to switch to direct uniform sampling instead of copying the result from int sampling
+However, this raise an inconsistancy bewteen sampling through simplified tiling function and tiling funtion using MPFR library. So the algorithm of tiling through simplified tiling function should also sample across numerical value instead of bit-level pattern

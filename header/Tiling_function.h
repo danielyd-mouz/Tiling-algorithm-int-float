@@ -43,6 +43,15 @@ bool uint_geq(uint256_t a, uint256_t b);     // return true if a >= b, false oth
 bool uint_leq(uint256_t a, uint256_t b);     // return true if a <= b, false otherwise
 bool uint_equal(uint256_t a, uint256_t b);   // return true if a == b, false otherwise   */
 
+// Enum type to represent the round mode for the float tiling function
+typedef enum{
+    RNDN,
+    RNDZ,
+    RNDU,
+    RNDD,
+    RNDA
+}rnd_type;
+
 /*
 The tiling function to generate a 1-D array of int samples with precision between 1 and 256 of type mpz_t.
 

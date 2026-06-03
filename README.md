@@ -80,17 +80,19 @@ Input Parameters:
    - mantissa: The number of bits in the exponent part of the float. Between 1 and 256. The program might still be able to handle the case if precision exceeds this range, but generally not recommended.
 
        For example, for a float32, the precision is 32 and the mantissa is 24. For a float64, the precision is 64 and the mantissa is 53.
-   - *rnd: Pointer of type mpfr_rnd_t * pointing to the rounding mode to use for the floating-point operations, rounding to nearest if left unspecified.
-      // MPFR_RNDN  round to nearest(default)
-      // MPFR_RNDZ  round toward zero
-      // MPFR_RNDU  round toward +infinity
-      // MPFR_RNDD  round toward -infinity
-      // MPFR_RNDA  round away from zero
+   - round: An enum value that represents the five possible rounding modes in MPFR library, rounding to nearest if left unspecified.
+      // RNDN  round to nearest(default)
+      // RNDZ  round toward zero
+      // RNDU  round toward +infinity
+      // RNDD  round toward -infinity
+      // RNDA  round away from zero
 
 Output:
    No output is returned, but the input array will be filled with num samples of the designated type.
    The caller can use the operations provided by the MPFR library to manipulate the output data.
 
+REMINDERS:
+   At the end of the application, calling mpfr_free_pool() and mpfr_free_cache() are required to free the extra spaca and variables created by MPFR library.
 #### Run without MPFR
 Divide into float and double cases
 - float cases with precision of 32 bits

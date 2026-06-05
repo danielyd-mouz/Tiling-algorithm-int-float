@@ -34,6 +34,18 @@ void uniform_offset(mpz_t max_offset, mpz_t value, size_t i, size_t num)
     mpz_clear(temp);
 }
 
+// Helper function to add random numbers to the unsigned int array
+void add_random_uarray(mpz_t *array, size_t *length, size_t capacity, uint32_t precision, gmp_randstate_t state)
+{
+    if(*length >= capacity) return;
+
+    mpz_t random_value;
+    mpz_init2(random_value, precision);
+    mpz_urandomb(random_value, state, precision);
+    add_to_uarray(array, length, capacity, random_value, precision);
+    mpz_clear(random_value);
+}
+
 // Helper function to add the value to the unsigned int array if it is not already in the unsigned integer array
 void add_to_uarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, uint32_t precision)
 {
@@ -163,6 +175,22 @@ void unsigned_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     mpz_t v;
     mpz_init2(v, precision);
 
+    //Adding random numbers
+    gmp_randstate_t state;
+    gmp_randinit_default(state);
+    mpz_t seed;
+    mpz_init(seed);
+    mpz_set_str(seed, "1234567890123456789012345678901234567890", 10);
+    gmp_randseed(state, seed);
+    size_t index = (num-count) / 4;
+
+    while(count < num && index > 0){
+        add_random_uarray(result, &count, num, precision, state);
+        index --;
+    }
+    gmp_randclear(state);
+    mpz_clear(seed);
+
     //Use uniform sampling to fill in the slot
     size_t remaining = num - count;
     for(size_t i = 0; i < remaining; i++){
@@ -191,6 +219,19 @@ void unsigned_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     mpz_clear(one);
     mpz_clear(iterate);
     mpz_clear(v);
+}
+
+// Helper function to add random numbers to the signed int array
+void add_random_iarray(mpz_t *array, size_t *length, size_t capacity, mpz_t min, uint32_t precision, gmp_randstate_t state)
+{
+    if(*length >= capacity) return;
+
+    mpz_t random_value;
+    mpz_init2(random_value, precision);
+    mpz_urandomb(random_value, state, precision);
+    mpz_add(random_value, random_value, min);
+    add_to_iarray(array, length, capacity, random_value, precision);
+    mpz_clear(random_value);
 }
 
 //Helper function to add the value to the signed int array
@@ -325,6 +366,21 @@ void signed_tiling_int(size_t num, uint32_t precision, mpz_t *result)
         mpz_clear(max_offset);
         return;
     }
+
+    //Adding random numbers
+    gmp_randstate_t state;
+    gmp_randinit_default(state);
+    mpz_t seed;
+    mpz_init(seed);
+    mpz_set_str(seed, "1234567890123456789012345678901234567890", 10);
+    gmp_randseed(state, seed);
+    size_t index = (num-count) / 4;
+    while(count < num && index > 0){
+        add_random_iarray(result, &count, num, min, precision, state);
+        index --;
+    }
+    gmp_randclear(state);
+    mpz_clear(seed);
 
     for(uint32_t i = 1; i+1 < precision && count < num; i++){
         mpz_t temp;
@@ -533,6 +589,50 @@ void uniform_offset_f(mpfr_t max_offset, mpfr_t value, size_t i, size_t num, mpf
     mpfr_clear(temp);
 }
 
+// Helper function to add random numbers to the mpfr_t array
+void add_random_farray(mpfr_t *array, size_t *length, size_t capacity,
+                       mpfr_t max, mpfr_t min, mpfr_prec_t mantissa,
+                       mpfr_prec_t precision, mpfr_rnd_t rnd, gmp_randstate_t state)
+{
+    if(*length >= capacity) return;
+
+    mpfr_t random_value;
+    mpfr_init2(random_value, mantissa);
+
+    // Step 1: random mantissa in [0, 1) — fills mantissa bits uniformly
+    mpfr_urandomb(random_value, state);
+
+    // Step 2: random exponent uniformly from the valid range
+    mpfr_prec_t exp_max = precision - 1 - mantissa;   // largest exponent
+    mpfr_prec_t exp_min = -mantissa;                    // smallest exponent
+    mpfr_prec_t exp_range_ui = exp_max - exp_min + 1;   // = precision
+
+    mpz_t exp_int;
+    mpz_init(exp_int);
+    mpz_t exp_range;
+    mpz_init_set_ui(exp_range, exp_range_ui);
+    mpz_urandomm(exp_int, state, exp_range);            // uniform in [0, precision)
+
+    signed long int actual_exp = (signed long int)exp_min + mpz_get_si(exp_int);
+    mpfr_mul_2si(random_value, random_value, actual_exp, rnd);
+
+    mpz_clear(exp_int);
+    mpz_clear(exp_range);
+
+    // Step 3: randomly negate (50% chance) — float range is symmetric
+    mpz_t sign_bit;
+    mpz_init(sign_bit);
+    mpz_urandomb(sign_bit, state, 1);
+    if(mpz_odd_p(sign_bit)){
+        mpfr_neg(random_value, random_value, rnd);
+    }
+    mpz_clear(sign_bit);
+
+    add_to_farray(array, length, capacity, random_value, max, min, rnd);
+
+    mpfr_clear(random_value);
+}
+
 // Body of the tiling function for float types
 void tiling_float(mpfr_t **arr, size_t num, mpfr_prec_t precision, mpfr_prec_t mantissa, rnd_type round)
 // REQUIRES: num > 0;
@@ -607,6 +707,23 @@ void tiling_float(mpfr_t **arr, size_t num, mpfr_prec_t precision, mpfr_prec_t m
     mpfr_set_ui(zero, 0, rnd);
     add_to_farray((*arr), &count, num, zero, max, min, rnd);
     add_boundary_f(num, precision, mantissa, &count, (*arr), rnd);
+
+    
+    //Adding random numbers
+    gmp_randstate_t state;
+    gmp_randinit_default(state);
+    mpz_t seed;
+    mpz_init(seed);
+    mpz_set_str(seed, "1234567890123456789012345678901234567890", 10);
+    gmp_randseed(state, seed);
+    size_t index = (num - count) / 4;
+    while(count < num && index > 0){
+        add_random_farray((*arr), &count, num, max, min, mantissa, precision, rnd, state);
+        index--;
+    }
+    gmp_randclear(state);
+    mpz_clear(seed);
+    
 
     //Place numbers with uniform exponent distribution
     mpfr_t exp2;

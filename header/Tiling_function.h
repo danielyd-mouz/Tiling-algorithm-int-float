@@ -74,7 +74,8 @@ void tiling_int(mpz_t *arr, size_t num, uint32_t precision, bool sign);
 
 
 //This is just a helper function to clear the mpz_t array created by tiling_int, which is not automatically cleared by the caller.
-void clear_iarray(mpz_t *array, size_t num);
+/*the function will only clear the inner array, and left the outer pointer to the user */
+void clear_iarray(mpz_t **array, size_t num);
 // REQUIRES: array != NULL;
 // REQUIRES: num = \length(array);
 
@@ -111,7 +112,8 @@ void tiling_float(mpfr_t *arr, size_t num, mpfr_prec_t precision, mpfr_prec_t ma
 // ENSURES: result != NULL && \length(result) == num;
 
 //This is just a helper function to clear the mpfr_t array created by tiling_float, which is not automatically cleared by the caller.
-void clear_farray(mpfr_t *array, size_t num);
+/*the function will only clear the inner array, and left the outer pointer to the user */
+void clear_farray(mpfr_t **array, size_t num);
 // REQUIRES: array != NULL;
 
 #endif

@@ -16,3 +16,13 @@ So the current version will try to use well-tested GMP and MPFR library to intro
 
 Since mpfr_t library does not support bit-level copy, I'll need to switch to direct uniform sampling instead of copying the result from int sampling
 However, this raise an inconsistancy bewteen sampling through simplified tiling function and tiling funtion using MPFR library. So the algorithm of tiling through simplified tiling function should also sample across numerical value instead of bit-level pattern
+
+Combination function:
+sample_arr : a new structure that carries both the number of values in the array and the array itself
+a new function to help parse size_t size and the sample array to the new type
+a clear function to clear the sample_arr variable
+
+input: size_t num : number of arrays passed to the function
+       sample_arr *sarr : the array that holds all the sample_arr
+
+output: The function outputs a void ** which contains all the combinations in one line

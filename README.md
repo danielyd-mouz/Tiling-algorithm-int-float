@@ -1,10 +1,11 @@
 # Tiling-algorithm-int-float
 ## Introduction
-This project intends to develop a smart way of tiling given certain variable type, amount of outputs and range.
+This project intends to develop a smart way of tiling given certain variable type, amount of outputs and range, and includes a helper function to produce Cartitian products of the array provided by users
 
 User must have a c environment equipped in their editor to access the code
 
 The additional GMP and MPFR libraries are required to use int and float tiling function with arbitrary size put to 256 bits and mantissa size. If the GMP and MPFS libraries are not installed, user can still use the simplifid tiling function for int with precision bits up to 64 and float that supports c's original float32 and float64
+
 
 ## Dependencies
 

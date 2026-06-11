@@ -2,23 +2,18 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdarg.h>
 #include <float.h>
 #include <limits.h>
 #include <string.h>
 #include <math.h>
 #include <gmp.h>
 #include <mpfr.h>
-#include "../header/type.h"
 #include "../header/Tiling_function.h"
 
-typedef enum{
-    RNDN,
-    RNDZ,
-    RNDU,
-    RNDD,
-    RNDA
-}rnd_type;
+void add_to_uarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, uint32_t precision);
+bool is_in_uarray(mpz_t *array, size_t length, mpz_t value);
+void add_to_iarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, uint32_t precision);
+bool is_in_iarray(mpz_t *array, size_t length, mpz_t value);
 
 //Helper functions to do uniform sampling
 void uniform_offset(mpz_t max_offset, mpz_t value, size_t i, size_t num)
@@ -68,7 +63,7 @@ void add_to_uarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, u
 
     if(!is_in_uarray(array, *length, value)){
       mpz_set(array[*length],value);
-      *length ++;   
+      (*length)++;
     }
 
     mpz_clear(max);
@@ -134,7 +129,7 @@ void unsigned_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     mpz_sub_ui(max, max, 1);
 
     if (num == 1) {
-        mpz_init2(result[0],precision);
+        mpz_set_ui(result[0], 0);
         mpz_clear(max);
         mpz_clear(min);
         mpz_clear(one);
@@ -142,7 +137,7 @@ void unsigned_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     }
 
     size_t count = 0;
-    
+
     add_boundary_ui(num, precision, &count, result);
 
     if(count == num) {
@@ -199,20 +194,26 @@ void unsigned_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     }
 
     //Try to fill in the remaining slots with more uniform sampling
-    size_t index = 0;
+    size_t retry_idx = 0;
     size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2; // to avoid overflow and limit the number of attempts
-    while(count < num && index < max_attempts){                    // limit the number of attempts to avoid infinite loop
-        uniform_offset(max, v, index, num);
+    while(count < num && retry_idx < max_attempts){                // limit the number of attempts to avoid infinite loop
+        uniform_offset(max, v, retry_idx, num);
         add_to_uarray(result, &count, num, v,precision);
-        index ++;
+        retry_idx++;
     }
 
     //sequential values to fall back
     mpz_t iterate;
     mpz_init2(iterate,precision);
-    while(count < num && mpz_cmp(iterate,max)<0){
+    size_t fallback_iters = 0;
+    size_t max_fallback = (num - count) * 2 + 100; // generous but bounded
+    while(count < num && mpz_cmp(iterate,max)<0 && fallback_iters < max_fallback){
         add_to_uarray(result, &count, num, iterate,precision);
         mpz_add_ui(iterate,iterate,1);
+        fallback_iters++;
+    }
+    if (count < num) {
+        fprintf(stderr, "Warning: unsigned_tiling_int only filled %zu of %zu requested samples.\n", count, num);
     }
     mpz_clear(max);
     mpz_clear(min);
@@ -261,7 +262,7 @@ void add_to_iarray(mpz_t *array, size_t *length, size_t capacity, mpz_t value, u
 
     if(!is_in_iarray(array, *length, value)){
       mpz_set(array[*length],value);
-      *length ++;   
+      (*length)++;
     }
 
     mpz_clear(max);
@@ -347,7 +348,7 @@ void signed_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     mpz_sub(max_offset, max_offset, one);
 
     if (num == 1) {
-        mpz_init2(result[0],precision);
+        mpz_set_ui(result[0], 0);
         mpz_clear(max);
         mpz_clear(min);
         mpz_clear(one);
@@ -391,7 +392,7 @@ void signed_tiling_int(size_t num, uint32_t precision, mpz_t *result)
         if(count < num){
             mpz_t comp;
             mpz_init2(comp, precision);
-            mpz_sub(comp, comp, temp);
+            mpz_sub(comp, max, temp);
             add_to_iarray(result, &count, num, comp, precision);
             mpz_clear(comp);
             mpz_clear(temp);
@@ -414,22 +415,28 @@ void signed_tiling_int(size_t num, uint32_t precision, mpz_t *result)
     }
 
     //Try to fill in the remaining slots with more uniform sampling
-    size_t index = 0;
+    size_t retry_idx = 0;
     size_t max_attempts = num > SIZE_MAX / 2 ? SIZE_MAX : num * 2; // to avoid overflow and limit the number of attempts
-    while(count < num && index < max_attempts){                    // limit the number of attempts to avoid infinite loop
-        uniform_offset(max_offset, v, index, num);
+    while(count < num && retry_idx < max_attempts){                // limit the number of attempts to avoid infinite loop
+        uniform_offset(max_offset, v, retry_idx, num);
         mpz_add(v, v, min);
         add_to_iarray(result, &count, num, v,precision);
-        index ++;
+        retry_idx++;
     }
 
     //sequential values to fall back
     mpz_t iterate;
     mpz_init2(iterate,precision);
     mpz_set(iterate,min);
-    while(count < num && mpz_cmp(iterate,max)<0){
+    size_t fallback_iters = 0;
+    size_t max_fallback = (num - count) * 2 + 100; // generous but bounded
+    while(count < num && mpz_cmp(iterate,max)<0 && fallback_iters < max_fallback){
         add_to_iarray(result, &count, num, iterate,precision);
         mpz_add_ui(iterate,iterate,1);
+        fallback_iters++;
+    }
+    if (count < num) {
+        fprintf(stderr, "Warning: signed_tiling_int only filled %zu of %zu requested samples.\n", count, num);
     }
     mpz_clear(max);
     mpz_clear(min);
@@ -449,11 +456,11 @@ void tiling_int(mpz_t **arr, size_t num, uint32_t precision, bool sign)
 {
     // Validate input parameters
     if(precision == 0 || precision > 256){
-        printf("Precision input must be between 1 and 256.\n");
+        fprintf(stderr, "Precision input must be between 1 and 256.\n");
         return;
     }
     if (num == 0) {
-        printf("Number of samples must be greater than 0.\n");
+        fprintf(stderr, "Number of samples must be greater than 0.\n");
         return;
     }
 
@@ -468,7 +475,7 @@ void tiling_int(mpz_t **arr, size_t num, uint32_t precision, bool sign)
     mpz_init(n);
     mpz_set_ui(n, num);
     if (mpz_cmp(n, max_samples) > 0) {
-        printf("Number of samples exceeds number of available values.\n");
+        fprintf(stderr, "Number of samples exceeds number of available values.\n");
         mpz_clear(max_samples);
         mpz_clear(base);
         mpz_clear(n);
@@ -480,11 +487,18 @@ void tiling_int(mpz_t **arr, size_t num, uint32_t precision, bool sign)
 
     // Check for potential overflow when allocating memory
     if(num > SIZE_MAX/sizeof(mpz_t)){
-        printf("Number of samples exceeds the maximum allowed.\n");
+        fprintf(stderr, "Number of samples exceeds the maximum allowed.\n");
         return;
     }
 
-    *arr = xmalloc(num*sizeof(mpz_t));
+    *arr = malloc(num*sizeof(mpz_t));
+    if (*arr == NULL) {
+        fprintf(stderr, "Error: failed to allocate mpz_t array of %zu elements.\n", num);
+        return;
+    }
+    for(size_t i = 0; i < num; i++){
+        mpz_init2((*arr)[i], precision);
+    }
 
     // Call the appropriate helper function based on the sign parameter
     if(!sign){
@@ -529,7 +543,7 @@ void add_to_farray(mpfr_t *array, size_t *length, size_t capacity, mpfr_t value,
 
     if(!is_in_farray(array, *length, value)){
       mpfr_set(array[*length],value, rnd);
-      *length ++;   
+      (*length)++;
     }
 }
 
@@ -549,6 +563,7 @@ void add_boundary_f(size_t num, mpfr_prec_t precision, mpfr_prec_t mantissa, siz
     mpfr_init2(max_half, mantissa);
     mpfr_init2(min_half, mantissa);
     mpfr_set_ui(max, 1, rnd);
+    mpfr_set_ui(min, 0, rnd);
     mpfr_div_2ui(max, max, mantissa, rnd);
     mpfr_ui_sub(max, 1, max, rnd);
     mpfr_mul_2si(max, max, precision - 1 - mantissa, rnd);
@@ -662,22 +677,35 @@ void tiling_float(mpfr_t **arr, size_t num, mpfr_prec_t precision, mpfr_prec_t m
             rnd = MPFR_RNDN;
              break;
     }
+
     if(precision == 0 || precision > 256){
-        printf("Precision input must be between 1 and 256.\n");
+        fprintf(stderr, "Precision input must be between 1 and 256.\n");
+        return;
+    }
+
+    if(mantissa <=0 || mantissa >= precision-1){
+        fprintf(stderr, "invalid mantissa.\n");
         return;
     }
 
     if (num == 0) {
-        printf("Number of samples must be greater than 0.\n");
+        fprintf(stderr, "Number of samples must be greater than 0.\n");
         return;
     }
 
     if(num > SIZE_MAX/sizeof(mpfr_t)){
-        printf("Number of samples exceeds the maximum allowed for float type.\n");
+        fprintf(stderr, "Number of samples exceeds the maximum allowed for float type.\n");
         return;
     }
 
-    *arr = xmalloc(num*sizeof(mpfr_t));
+    *arr = malloc(num*sizeof(mpfr_t));
+    if (*arr == NULL) {
+        fprintf(stderr, "Error: failed to allocate mpfr_t array of %zu elements.\n", num);
+        return;
+    }
+    for(size_t i = 0; i < num; i++){
+        mpfr_init2((*arr)[i], mantissa);
+    }
 
     mpfr_t max;
     mpfr_t min;
@@ -693,7 +721,6 @@ void tiling_float(mpfr_t **arr, size_t num, mpfr_prec_t precision, mpfr_prec_t m
     mpfr_sub(min, min, max,rnd);
 
     if(num == 1){
-        mpfr_init2((*arr)[0], mantissa);
         mpfr_set_ui((*arr)[0], 1, rnd);
         mpfr_clear(max);
         mpfr_clear(min);
@@ -707,6 +734,7 @@ void tiling_float(mpfr_t **arr, size_t num, mpfr_prec_t precision, mpfr_prec_t m
     mpfr_set_ui(zero, 0, rnd);
     add_to_farray((*arr), &count, num, zero, max, min, rnd);
     add_boundary_f(num, precision, mantissa, &count, (*arr), rnd);
+    mpfr_clear(zero);
 
     
     //Adding random numbers
@@ -757,18 +785,27 @@ void tiling_float(mpfr_t **arr, size_t num, mpfr_prec_t precision, mpfr_prec_t m
 
     //Fill in the array with numbers starting from 0 and increasing by a small step until the array is full
     mpfr_t step;
+    mpfr_t neg_step;
     mpfr_init2(step, mantissa);
+    mpfr_init2(neg_step, mantissa);
     mpfr_set_zero(step, rnd);
-    while(count < num && mpfr_cmp(step, max) <= 0){
+    size_t fallback_iters = 0;
+    size_t max_fallback = (num - count) * 2 + 100; // generous but bounded
+    while(count < num && mpfr_cmp(step, max) <= 0 && fallback_iters < max_fallback){
         add_to_farray((*arr), &count, num, step, max, min, rnd);
-        if(count < num){
-            mpfr_neg(step, step, rnd);
-            add_to_farray((*arr), &count, num, step, max, min, rnd);
+        if(count < num && mpfr_sgn(step) != 0){
+            mpfr_neg(neg_step, step, rnd);
+            add_to_farray((*arr), &count, num, neg_step, max, min, rnd);
         }
-        mpfr_nextafter(step, step, rnd);
+        mpfr_nextabove(step);
+        fallback_iters++;
     }
+    mpfr_clear(neg_step);
     mpfr_clear(step);
 
+    if (count < num) {
+        fprintf(stderr, "Warning: tiling_float only filled %zu of %zu requested samples.\n", count, num);
+    }
 
     mpfr_clear(max);
     mpfr_clear(min);

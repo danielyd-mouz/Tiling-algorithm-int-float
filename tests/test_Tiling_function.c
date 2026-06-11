@@ -71,8 +71,8 @@ bool within_range_uint64(uint64_t *array, size_t length, uint32_t precision)
 // Helper function to determine if all the values are within the specified range for signed int types
 bool within_range_int64(int64_t *array, size_t length, uint32_t precision)
 {
-    int64_t max_value = (precision = 64) ? MAX_INT64 : (1LL << (precision - 1)) - 1;
-    int64_t min_value = (precision == 64) ? MIN_INT64 : -(1LL << (precision - 1));
+    int64_t max_value = (precision = 64) ? INT64_MAX : (1LL << (precision - 1)) - 1;
+    int64_t min_value = (precision == 64) ? INT64_MIN : -(1LL << (precision - 1));
     for (size_t i = 0; i < length; i++) {
         if (array[i] > max_value || array[i] < min_value) {
             return false;
@@ -92,7 +92,7 @@ bool within_range_float(float *array, size_t length)
     return true;
 }
 
-void main(){
+void main(void){
 //contain the correct range of value for int types
 
 

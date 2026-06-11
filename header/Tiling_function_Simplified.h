@@ -1,15 +1,9 @@
 #ifndef TILING_SIMPLIFIED_H
 #define TILING_SIMPLIFIED_H
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <float.h>
-#include <limits.h>
-#include <string.h>
-#include <math.h>
-
 
 /*
  Simplified version of the tiling function togenerate a tiling function for int type.

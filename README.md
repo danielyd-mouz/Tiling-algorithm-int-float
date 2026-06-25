@@ -8,11 +8,13 @@ The additional GMP and MPFR libraries are required to use int and float tiling f
 
 ## Directory:
 ├── code/           # Implementation files
+│   ├── compare.c                  (compare two functions)
 │   ├── Tiling_function.c          (GMP/MPFR tiling)
 │   ├── Tiling_function_Simplified.c  (no external deps)
 │   ├── type.c                     (256-bit custom types)
 │   └── entire_combination.c       (Cartesian product)
 ├── header/         # Public headers
+│   ├── compare_api.h
 │   ├── Tiling_function.h
 │   ├── Tiling_function_Simplified.h
 │   ├── type.h
@@ -158,6 +160,9 @@ And functions that allow users to interact with the datatypes in certain ways:
 - void free_sample_array_list_content(sample_array_list *sample_list);
    //This function frees the memory of sample_list AND ALSO calls free() on every array passed to it via add_to_sample_array
    //Use only when you want the library to take full ownership of the arrays. Do NOT call both free_sample_array_list and this function — pick one.
+
+## Compare function
+
 
 ## Memory Management
 

@@ -26,3 +26,13 @@ input: size_t num : number of arrays passed to the function
        sample_arr *sarr : the array that holds all the sample_arr
 
 output: The function outputs a void ** which contains all the combinations in one line
+
+In order for the user to use the compare two functions:
+       - First, a comparison function should be implemented to recieve a combination, two functions and the sigma: type ?
+         - in the sequence of (f1, f2, sigma, tiling function1, tiling function2, tiling function3 .....)
+       - Then, a main function that takes in the tiling functions appointed, and make combination
+       - The outermost function that produces the combination, compare results of the two function and give out percentage of samples that have difference larger than sigma.
+
+**My first thought of implementing the two function provided by users is to let them first use gcc to compile their two files, with their main function having exactly the same input format as the combination resulted from their chosen tiling functions
+  Also, in order to better manipulate the function, users need to give the output type of the two functions and sigma also in string
+  Currently only basic numeric comparison allowed, but latter user can input sigma in other type and their own customed compaison function

@@ -8,12 +8,14 @@
 #include <string.h>
 #include <math.h>
 #include <gmp.h>
+#include <mpfr.h>
 #include "../header/entire_combination.h"
 
 //new type that contains both the size of the sample array and also the array itself
 typedef struct {
     size_t size;
     size_t elem_size;
+    compare_output_type type;
     void *array;
 } sample_array;
 
@@ -31,6 +33,15 @@ struct combination_array {
     size_t num_elem;               // number of elements in each combination
     sample_array_list *samples;    // reference to the input arrays (not owned)
 };
+
+//Get combination number
+mpz_srcptr combination_array_num_comb(const combination_array *comb_array)
+{
+    if (comb_array == NULL) {
+        return NULL;
+    }
+    return comb_array->num_comb;
+}
 
 //Helper function to create a sample_array_list struct
 sample_array_list *create_sample_array_list(size_t num_arrays)
@@ -58,7 +69,7 @@ sample_array_list *create_sample_array_list(size_t num_arrays)
 }
 
 //Helper function to put an array as a sample_array struct
-void add_to_sample_array(sample_array_list *sample_list, size_t elem_size, size_t size, void *array)
+void add_to_sample_array(sample_array_list *sample_list, size_t elem_size, size_t size, void *array, compare_output_type type)
 {
     if(sample_list == NULL || sample_list->counter == sample_list->num_arrays){
         return;
@@ -68,6 +79,7 @@ void add_to_sample_array(sample_array_list *sample_list, size_t elem_size, size_
     }
     sample_array sample;
     sample.size = size;
+    sample.type = type;
     sample.elem_size = elem_size;
     sample.array = array;
     sample_list->samples[sample_list->counter] = sample;
@@ -126,7 +138,7 @@ combination_array *combine_arrays(sample_array_list *sample_list)
 //Compute the i-th combination on-the-fly using mixed-radix — no precomputed storage.
 //index is an mpz_t, so indices beyond SIZE_MAX are supported.
 //Returns a freshly-allocated array of num_elem pointers (caller frees via free_ith_combination).
-void **get_the_ith_combination(combination_array *combinations, mpz_srcptr index)
+combination get_the_ith_combination(combination_array *combinations, mpz_srcptr index)
 {
     if(combinations == NULL) return NULL;
     // Bounds check: index must be < num_comb (num_comb is always >= 1 here)
@@ -186,10 +198,10 @@ void free_combination_array(combination_array *comb_array)
 }
 
 //Helper function to free memory of the ith combination
-void free_ith_combination(void **combination)
+void free_ith_combination(combination comb)
 {
-    if(combination == NULL) return;
-    free(combination);
+    if(comb == NULL) return;
+    free(comb);
 }
 
 //Helper function to help free the memory from sample_array_list
@@ -204,7 +216,19 @@ void free_sample_array_list(sample_array_list *sample_list)
 void free_sample_array_list_content(sample_array_list *sample_list)
 {
     if(sample_list == NULL) return;
-    for(size_t i = 0; i < sample_list->num_arrays; i++){
+    for(size_t i = 0; i < sample_list->counter; i++){
+        if(sample_list->samples[i].type == CMP_MPFR){
+            mpfr_t *arr = (mpfr_t *)sample_list->samples[i].array;
+            for(size_t j = 0; j < sample_list->samples[i].size; j++){
+                mpfr_clear(arr[j]);
+            }
+        }
+        else if(sample_list->samples[i].type == CMP_MPZ){
+            mpz_t *arr = (mpz_t *)sample_list->samples[i].array;
+            for(size_t j = 0; j < sample_list->samples[i].size; j++){
+                mpz_clear(arr[j]);
+            }
+        }
         free(sample_list->samples[i].array);
     }
     free(sample_list->samples);

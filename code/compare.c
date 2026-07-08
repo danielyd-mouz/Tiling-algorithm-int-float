@@ -832,34 +832,71 @@ static void function_result_to_mpfr(mpfr_t destination, const function_result *r
 static bool results_within_sigma(
     const function_result *first,
     const function_result *second,
-    mpfr_srcptr sigma)
+    mpfr_srcptr sigma,
+    bool *absolute_within,
+    bool *relative_within)
 {
     mpfr_t first_value;
     mpfr_t second_value;
     mpfr_t difference;
-    bool within;
+    mpfr_t first_abs;
+    mpfr_t second_abs;
+    mpfr_t scale;
+    mpfr_t threshold;
 
     mpfr_init2(first_value, 512);
     mpfr_init2(second_value, 512);
     mpfr_init2(difference, 512);
+    mpfr_init2(first_abs, 512);
+    mpfr_init2(second_abs, 512);
+    mpfr_init2(scale, 512);
+    mpfr_init2(threshold, 512);
+
+    *absolute_within = false;
+    *relative_within = false;
 
     function_result_to_mpfr(first_value, first);
     function_result_to_mpfr(second_value, second);
 
     if (mpfr_nan_p(first_value) || mpfr_nan_p(second_value)) {
-        within = false;
+        *absolute_within = false;
+        *relative_within = false;
     } else if (mpfr_equal_p(first_value, second_value)) {
-        within = true;
+        *absolute_within = true;
+        *relative_within = true;
+    } else if (!mpfr_number_p(first_value) || !mpfr_number_p(second_value)) {
+        *absolute_within = false;
+        *relative_within = false;
     } else {
         mpfr_sub(difference, first_value, second_value, MPFR_RNDN);
         mpfr_abs(difference, difference, MPFR_RNDN);
-        within = !mpfr_nan_p(difference) && mpfr_cmp(difference, sigma) <= 0;
+        *absolute_within = !mpfr_nan_p(difference) &&
+                           mpfr_cmp(difference, sigma) <= 0;
+
+        mpfr_abs(first_abs, first_value, MPFR_RNDN);
+        mpfr_abs(second_abs, second_value, MPFR_RNDN);
+        mpfr_set_ui(scale, 1, MPFR_RNDN);
+        if (mpfr_cmp(first_abs, scale) > 0) {
+            mpfr_set(scale, first_abs, MPFR_RNDN);
+        }
+        if (mpfr_cmp(second_abs, scale) > 0) {
+            mpfr_set(scale, second_abs, MPFR_RNDN);
+        }
+
+        mpfr_mul(threshold, sigma, scale, MPFR_RNDN);
+        *relative_within = !mpfr_nan_p(difference) &&
+                           !mpfr_nan_p(threshold) &&
+                           mpfr_cmp(difference, threshold) <= 0;
     }
 
+    mpfr_clear(threshold);
+    mpfr_clear(scale);
+    mpfr_clear(second_abs);
+    mpfr_clear(first_abs);
     mpfr_clear(first_value);
     mpfr_clear(second_value);
     mpfr_clear(difference);
-    return within;
+    return *absolute_within || *relative_within;
 }
 
 static int compare_all_combinations(
@@ -870,7 +907,8 @@ static int compare_all_combinations(
     const loaded_function *second_function,
     user_output_type second_type,
     mpfr_srcptr sigma,
-    mpz_t within_count)
+    mpz_t absolute_within_count,
+    mpz_t relative_within_count)
 {
     mpz_srcptr total = combination_array_num_comb(combinations);
     mpz_t index;
@@ -882,7 +920,8 @@ static int compare_all_combinations(
         return -1;
     }
 
-    mpz_set_ui(within_count, 0);
+    mpz_set_ui(absolute_within_count, 0);
+    mpz_set_ui(relative_within_count, 0);
     mpz_init_set_ui(index, 0);
     function_result_init(&first_result, first_type);
     function_result_init(&second_result, second_type);
@@ -911,8 +950,19 @@ static int compare_all_combinations(
             goto cleanup;
         }
 
-        if (results_within_sigma(&first_result, &second_result, sigma)) {
-            mpz_add_ui(within_count, within_count, 1);
+        bool absolute_within;
+        bool relative_within;
+        results_within_sigma(
+            &first_result,
+            &second_result,
+            sigma,
+            &absolute_within,
+            &relative_within);
+        if (absolute_within) {
+            mpz_add_ui(absolute_within_count, absolute_within_count, 1);
+        }
+        if (relative_within) {
+            mpz_add_ui(relative_within_count, relative_within_count, 1);
         }
 
         free_ith_combination(inputs);
@@ -929,7 +979,7 @@ cleanup:
 }
 
 //Function that calculate and print out the amount and precentage of samples that stays within the provided sigma
-static void print_comparison_result(mpz_srcptr within_count, mpz_srcptr total)
+static void print_one_comparison_result(const char *label, mpz_srcptr within_count, mpz_srcptr total)
 {
     mpfr_t ratio;
     mpfr_t percentage;
@@ -940,13 +990,29 @@ static void print_comparison_result(mpz_srcptr within_count, mpz_srcptr total)
     mpfr_div_z(ratio, ratio, total, MPFR_RNDN);
     mpfr_mul_ui(percentage, ratio, 100, MPFR_RNDN);
 
-    gmp_printf("Total combinations: %Zd\n", total);
-    gmp_printf("Within sigma:       %Zd\n", within_count);
-    mpfr_printf("Within ratio:       %.12Rf\n", ratio);
-    mpfr_printf("Within percentage:  %.8Rf%%\n", percentage);
+    printf("%s\n", label);
+    gmp_printf("  Within sigma:      %Zd\n", within_count);
+    mpfr_printf("  Within ratio:      %.12Rf\n", ratio);
+    mpfr_printf("  Within percentage: %.8Rf%%\n", percentage);
 
     mpfr_clear(ratio);
     mpfr_clear(percentage);
+}
+
+static void print_comparison_result(
+    mpz_srcptr absolute_within_count,
+    mpz_srcptr relative_within_count,
+    mpz_srcptr total)
+{
+    gmp_printf("Total combinations: %Zd\n", total);
+    print_one_comparison_result(
+        "Absolute error result:",
+        absolute_within_count,
+        total);
+    print_one_comparison_result(
+        "Relative error result:",
+        relative_within_count,
+        total);
 }
 
 
@@ -985,9 +1051,11 @@ int main(void)
     sample_array_list *sal = NULL;
     combination_array *combinations = NULL;
     mpfr_t sigma;
-    mpz_t within_count;
+    mpz_t absolute_within_count;
+    mpz_t relative_within_count;
     mpfr_init2(sigma, 256);
-    mpz_init(within_count);
+    mpz_init(absolute_within_count);
+    mpz_init(relative_within_count);
 
     puts("Output types: int64, uint64, float, double, mpz, mpfr.");
     puts("DLL function signature: int name(void **inputs, size_t num_inputs, void *output);");
@@ -1062,13 +1130,15 @@ int main(void)
             &second_loaded,
             second_function.output_type,
             sigma,
-            within_count) != 0) {
+            absolute_within_count,
+            relative_within_count) != 0) {
         exit_code = CMP_EXIT_RUNTIME;
         goto cleanup;
     }
 
     print_comparison_result(
-        within_count,
+        absolute_within_count,
+        relative_within_count,
         combination_array_num_comb(combinations));
     exit_code = CMP_EXIT_OK;
 
@@ -1081,7 +1151,8 @@ cleanup:
     if (sal != NULL) {
         free_sample_array_list_content(sal);
     }
-    mpz_clear(within_count);
+    mpz_clear(relative_within_count);
+    mpz_clear(absolute_within_count);
     mpfr_clear(sigma);
     return exit_code;
 }

@@ -161,8 +161,9 @@ And functions that allow users to interact with the datatypes in certain ways:
    //This function frees the memory of sample_list AND ALSO calls free() on every array passed to it via add_to_sample_array
    //Use only when you want the library to take full ownership of the arrays. Do NOT call both free_sample_array_list and this function — pick one.
 
-## Compare function
+## Compare Function:
 
+### Pr
 
 ## Memory Management
 

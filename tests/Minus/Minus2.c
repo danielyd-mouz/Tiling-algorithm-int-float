@@ -1,0 +1,18 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <math.h>
+#include <limits.h>
+#include <float.h>
+#include <string.h>
+
+//Requires num_inputs = 2
+int minus(void **inputs, size_t num_inputs, void *output){
+    if(num_inputs != 2) return -1;
+    int64_t x = *((int64_t *)(inputs[0]));
+    int64_t y = *((int64_t *)(inputs[1]));
+    uint64_t result = (uint64_t)x + (0 - (uint64_t)y);
+    *((int64_t *)output) = (int64_t)result;
+    return 0;
+}

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <gmp.h>
+#include <mpfr.h>
 
 typedef struct sample_array_list sample_array_list;
 typedef struct combination_array combination_array;
@@ -23,6 +24,10 @@ sample_array_list *create_sample_array_list(size_t num_arrays);
 
 //get the number of combination
 mpz_srcptr combination_array_num_comb(const combination_array *comb_array);
+
+//Format one value from a generated combination according to the original sample type.
+int format_combination_value(const combination_array *comb_array, size_t input_index,
+                             const void *value, char *buffer, size_t capacity);
 
 //Helper function to put an array as a sample_array struct into the sample_array_list pointer
 void add_to_sample_array(sample_array_list *sample_list, size_t elem_size, size_t size, void *array, compare_output_type type);

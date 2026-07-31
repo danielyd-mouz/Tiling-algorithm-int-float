@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <float.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <string.h>
 #include <math.h>
@@ -41,6 +42,57 @@ mpz_srcptr combination_array_num_comb(const combination_array *comb_array)
         return NULL;
     }
     return comb_array->num_comb;
+}
+
+//Format one sampled value so it can be inserted into an external command template.
+int format_combination_value(const combination_array *comb_array, size_t input_index,
+                             const void *value, char *buffer, size_t capacity)
+{
+    sample_array sample;
+    int written;
+
+    if (comb_array == NULL || value == NULL || buffer == NULL || capacity == 0) {
+        return -1;
+    }
+    if (input_index >= comb_array->num_elem) {
+        return -1;
+    }
+
+    sample = comb_array->samples->samples[input_index];
+    switch (sample.type) {
+        case CMP_I64:
+            written = snprintf(buffer, capacity, "%" PRId64,
+                               *((const int64_t *)value));
+            break;
+        case CMP_U64:
+            written = snprintf(buffer, capacity, "%" PRIu64,
+                               *((const uint64_t *)value));
+            break;
+        case CMP_DOUBLE:
+            if (sample.elem_size == sizeof(float)) {
+                written = snprintf(buffer, capacity, "%.9g",
+                                   (double)(*((const float *)value)));
+            } else {
+                written = snprintf(buffer, capacity, "%.17g",
+                                   *((const double *)value));
+            }
+            break;
+        case CMP_MPZ:
+            written = gmp_snprintf(buffer, capacity, "%Zd",
+                                   (mpz_srcptr)value);
+            break;
+        case CMP_MPFR:
+            written = mpfr_snprintf(buffer, capacity, "%.40Rg",
+                                    (mpfr_srcptr)value);
+            break;
+        default:
+            return -1;
+    }
+
+    if (written < 0 || (size_t)written >= capacity) {
+        return -1;
+    }
+    return 0;
 }
 
 //Helper function to create a sample_array_list struct

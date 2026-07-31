@@ -14,6 +14,10 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <sys/select.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 #include "../header/compare_api.h"
 #include "../header/entire_combination.h"
@@ -31,6 +35,10 @@ enum {
 #define MAX_INPUT_ATTEMPTS 3
 #define MAX_SAMPLING_ARRAYS 128
 #define MAX_INPUT_TOKENS 5
+#define SPIRAL_VALUE_BUFFER_SIZE 256
+#define SPIRAL_COMMAND_BUFFER_SIZE 4096
+#define SPIRAL_LINE_BUFFER_SIZE 2048
+#define SPIRAL_READ_TIMEOUT_SECONDS 10
 
 typedef int (*sampling_parse_fn)(int argc, char **argv, sample_array_list *sal);
 
@@ -63,6 +71,19 @@ typedef struct {
 #endif
     compare_target_fn function;
 } loaded_function;
+
+//struct to help store the info of spiral process and communication
+typedef struct {
+    char executable[INPUT_BUFFER_SIZE];
+    char txt_path[INPUT_BUFFER_SIZE];
+    char *setup_text;
+    char *call_template;
+#ifndef _WIN32
+    pid_t pid;
+    int stdin_fd;
+    int stdout_fd;
+#endif
+} spiral_target;
 
 typedef struct {
     user_output_type type;
@@ -232,6 +253,173 @@ static int read_function_info(const char *prompt, function_info *out)
     }
 
     return -1;
+}
+
+//copy the given range of the text and print out as a result
+static char *copy_text_range(const char *start, size_t length)
+{
+    char *copy = malloc(length + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+
+    memcpy(copy, start, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+//store the entire content of the file into a char list for later process
+static char *read_entire_file(const char *path)
+{
+    FILE *file;
+    long size;
+    char *content;
+    size_t bytes_read;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return NULL;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    size = ftell(file);
+    if (size < 0) {
+        fclose(file);
+        return NULL;
+    }
+    rewind(file);
+
+    content = malloc((size_t)size + 1);
+    if (content == NULL) {
+        fclose(file);
+        return NULL;
+    }
+
+    bytes_read = fread(content, 1, (size_t)size, file);
+    fclose(file);
+    content[bytes_read] = '\0';
+    return content;
+}
+
+//load the text into setup text and template text(the last line of the file)
+static int load_spiral_txt(const char *path, spiral_target *target)
+{
+    char *content = read_entire_file(path);
+    size_t length;
+    size_t template_start;
+    size_t setup_length;
+
+    if (content == NULL) {
+        fprintf(stderr, "Error: failed to read SPIRAL txt file '%s'.\n", path);
+        return -1;
+    }
+
+    length = strlen(content);
+    while (length > 0 && (content[length - 1] == '\n' || content[length - 1] == '\r')) {
+        content[--length] = '\0';
+    }
+
+    if (length == 0) {
+        fprintf(stderr, "Error: SPIRAL txt file must not be empty.\n");
+        free(content);
+        return -1;
+    }
+
+    template_start = length;
+    while (template_start > 0 &&
+           content[template_start - 1] != '\n' &&
+           content[template_start - 1] != '\r') {
+        template_start--;
+    }
+
+    setup_length = template_start;
+    while (setup_length > 0 &&
+           (content[setup_length - 1] == '\n' || content[setup_length - 1] == '\r')) {
+        setup_length--;
+    }
+
+    target->setup_text = copy_text_range(content, setup_length);
+    target->call_template = copy_text_range(content + template_start, length - template_start);
+    free(content);
+
+    if (target->setup_text == NULL || target->call_template == NULL) {
+        fprintf(stderr, "Error: failed to allocate SPIRAL txt content.\n");
+        free(target->setup_text);
+        free(target->call_template);
+        target->setup_text = NULL;
+        target->call_template = NULL;
+        return -1;
+    }
+    if (target->call_template[0] == '\0') {
+        fprintf(stderr, "Error: SPIRAL call template must not be empty.\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+//function that reads the inputs of spiral info and parse the result to spiral_target if legal
+static int read_spiral_info(spiral_target *target)
+{
+    char line[INPUT_BUFFER_SIZE];
+    char *tokens[2];
+
+    memset(target, 0, sizeof(*target));
+#ifndef _WIN32
+    target->pid = -1;
+    target->stdin_fd = -1;
+    target->stdout_fd = -1;
+#endif
+
+    for (int attempt = 1; attempt <= MAX_INPUT_ATTEMPTS; attempt++) {
+        read_line_status status = read_line(
+            "Please enter SPIRAL executable and txt path: ",
+            line,
+            sizeof(line));
+        if (status == READ_LINE_TOO_LONG) {
+            fprintf(stderr, "Error: input line is too long.\n");
+            return -1;
+        }
+        if (status == READ_LINE_EOF) {
+            fprintf(stderr, "Error: failed to read input.\n");
+            return -1;
+        }
+
+        size_t token_count = split_tokens(line, tokens, 2);
+        if (token_count < 2) {
+            fprintf(stderr,
+                    "Error: too few inputs; enter a SPIRAL executable and txt path.\n");
+        } else if (token_count > 2) {
+            fprintf(stderr,
+                    "Error: too many inputs; enter exactly a SPIRAL executable and txt path.\n");
+        } else if (!file_exists(tokens[1])) {
+            fprintf(stderr, "Error: SPIRAL txt file '%s' does not exist or cannot be opened.\n",
+                    tokens[1]);
+        } else {
+            snprintf(target->executable, sizeof(target->executable), "%s", tokens[0]);
+            snprintf(target->txt_path, sizeof(target->txt_path), "%s", tokens[1]);
+            return load_spiral_txt(tokens[1], target);
+        }
+
+        fprintf(stderr, "Attempt %d of %d failed.\n", attempt, MAX_INPUT_ATTEMPTS);
+    }
+
+    return -1;
+}
+
+//clear the memory occupied by the structure target
+static void clear_spiral_target(spiral_target *target)
+{
+    if (target == NULL) {
+        return;
+    }
+    free(target->setup_text);
+    free(target->call_template);
+    target->setup_text = NULL;
+    target->call_template = NULL;
 }
 
 //parse a string to uint32_t, return true if successful
@@ -748,6 +936,430 @@ static void unload_function(loaded_function *loaded)
     loaded->function = NULL;
 }
 
+#ifndef _WIN32
+
+//helper to append the entire string to a given string
+static int append_text(char *destination, size_t capacity, size_t *used, const char *text)
+{
+    size_t length = strlen(text);
+    if (*used > capacity || length >= capacity - *used) {
+        return -1;
+    }
+
+    memcpy(destination + *used, text, length);
+    *used += length;
+    destination[*used] = '\0';
+    return 0;
+}
+
+//helper function to append a single char after a given string
+static int append_char(char *destination, size_t capacity, size_t *used, char ch)
+{
+    if (*used + 1 >= capacity) {
+        return -1;
+    }
+
+    destination[(*used)++] = ch;
+    destination[*used] = '\0';
+    return 0;
+}
+
+//decide if the content is decimal number
+static bool is_decimal_digit(char ch)
+{
+    return ch >= '0' && ch <= '9';
+}
+
+//determine of the the char belongs to one of the following format string specification
+static bool is_printf_conversion_char(char ch)
+{
+    return strchr("diuoxXfFeEgGaAcsp", ch) != NULL;
+}
+
+//process all kinds of special format specifier
+static const char *printf_specifier_end(const char *percent)
+{
+    const char *cursor = percent + 1;
+
+    if (*cursor == '\0') {
+        return NULL;
+    }
+    if (*cursor == '%') {
+        return cursor + 1;
+    }
+
+    while (strchr("-+ #0", *cursor) != NULL) {
+        cursor++;
+    }
+
+    if (*cursor == '*') {
+        cursor++;
+    } else {
+        while (is_decimal_digit(*cursor)) {
+            cursor++;
+        }
+    }
+
+    if (*cursor == '.') {
+        cursor++;
+        if (*cursor == '*') {
+            cursor++;
+        } else {
+            while (is_decimal_digit(*cursor)) {
+                cursor++;
+            }
+        }
+    }
+
+    if (cursor[0] == 'h' && cursor[1] == 'h') {
+        cursor += 2;
+    } else if (cursor[0] == 'l' && cursor[1] == 'l') {
+        cursor += 2;
+    } else if (strchr("hljztL", *cursor) != NULL) {
+        cursor++;
+    }
+
+    if (!is_printf_conversion_char(*cursor)) {
+        return NULL;
+    }
+
+    return cursor + 1;
+}
+
+//helper that turn all the format specifier into actual samples
+static int build_spiral_command(
+    const spiral_target *target,
+    const combination_array *combinations,
+    combination inputs,
+    size_t num_inputs,
+    char *command,
+    size_t command_capacity)
+{
+    char values[MAX_SAMPLING_ARRAYS][SPIRAL_VALUE_BUFFER_SIZE];
+    size_t used = 0;
+    size_t value_index = 0;
+    const char *cursor;
+
+    if (target == NULL || target->call_template == NULL ||
+        command == NULL || command_capacity == 0 ||
+        num_inputs > MAX_SAMPLING_ARRAYS) {
+        return -1;
+    }
+
+    //turn all the outputs from void * to string format
+    for (size_t i = 0; i < num_inputs; i++) {
+        if (format_combination_value(
+                combinations,
+                i,
+                inputs[i],
+                values[i],
+                sizeof(values[i])) != 0) {
+            return -1;
+        }
+    }
+
+    //Go through every char; replace each printf-style conversion with the next sample.
+    command[0] = '\0';
+    cursor = target->call_template;
+    while (*cursor != '\0') {
+        if (*cursor == '%') {
+            if (cursor[1] == '%') {
+                if (append_char(command, command_capacity, &used, '%') != 0) {
+                    return -1;
+                }
+                cursor += 2;
+                continue;
+            }
+
+            const char *specifier_end = printf_specifier_end(cursor);
+            if (specifier_end == NULL) {
+                fprintf(stderr,
+                        "Error: SPIRAL template has an unsupported or incomplete printf placeholder.\n");
+                return -1;
+            }
+            if (value_index >= num_inputs) {
+                fprintf(stderr,
+                        "Error: SPIRAL template has more printf placeholders than inputs.\n");
+                return -1;
+            }
+            if (append_text(command, command_capacity, &used, values[value_index]) != 0) {
+                return -1;
+            }
+            value_index++;
+            cursor = specifier_end;
+            continue;
+        }
+
+        if (append_char(command, command_capacity, &used, *cursor) != 0) {
+            return -1;
+        }
+        cursor++;
+    }
+
+    if (value_index < num_inputs) {
+        fprintf(stderr,
+                "Error: SPIRAL template has fewer printf placeholders than inputs.\n");
+        return -1;
+    }
+
+    if (used == 0 || command[used - 1] != '\n') {
+        if (append_char(command, command_capacity, &used, '\n') != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+//get the result and turn the result into mpfr for comparison
+static bool parse_mpfr_from_line(mpfr_t out, const char *line)
+{
+    char copy[SPIRAL_LINE_BUFFER_SIZE];
+    char *token;
+
+    snprintf(copy, sizeof(copy), "%s", line);
+    token = strtok(copy, " \t\r\n,;:");
+    while (token != NULL) {
+        if (mpfr_set_str(out, token, 10, MPFR_RNDN) == 0 &&
+            mpfr_number_p(out)) {
+            return true;
+        }
+        token = strtok(NULL, " \t\r\n,;:");
+    }
+
+    return false;
+}
+#endif
+
+#ifdef _WIN32//---------------------------spiral unavaliable for windows--------------------------//
+static bool start_spiral(spiral_target *target)
+{
+    (void)target;
+    fprintf(stderr, "Error: SPIRAL mode currently requires POSIX fork/pipe; "
+                    "this Windows build only supports DLL-vs-DLL mode.\n");
+    return false;
+}
+
+static void stop_spiral(spiral_target *target)
+{
+    (void)target;
+}
+
+static bool run_spiral_sample(
+    spiral_target *target,
+    const combination_array *combinations,
+    combination inputs,
+    size_t num_inputs,
+    mpfr_t output)
+{
+    (void)target;
+    (void)combinations;
+    (void)inputs;
+    (void)num_inputs;
+    (void)output;
+    return false;
+}
+#else //---------------------linux special feature for spiral comparison--------------------------//
+//write the content of "text" as input to spiral
+static bool write_all_to_fd(int fd, const char *text)
+{
+    size_t length = strlen(text);
+    size_t written_total = 0;
+
+    while (written_total < length) {
+        ssize_t written = write(fd, text + written_total, length - written_total);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        written_total += (size_t)written;
+    }
+
+    return true;
+}
+
+//start a child process and replace it with spiral, and then pipe it and use dup to connect the result channel
+static bool start_spiral(spiral_target *target)
+{
+    int to_spiral[2];
+    int from_spiral[2];
+
+    if (pipe(to_spiral) != 0) {
+        perror("pipe");
+        return false;
+    }
+    if (pipe(from_spiral) != 0) {
+        perror("pipe");
+        close(to_spiral[0]);
+        close(to_spiral[1]);
+        return false;
+    }
+
+    target->pid = fork();
+    if (target->pid < 0) {
+        perror("fork");
+        close(to_spiral[0]);
+        close(to_spiral[1]);
+        close(from_spiral[0]);
+        close(from_spiral[1]);
+        return false;
+    }
+
+    if (target->pid == 0) {
+        dup2(to_spiral[0], STDIN_FILENO);
+        dup2(from_spiral[1], STDOUT_FILENO);
+        dup2(from_spiral[1], STDERR_FILENO);
+
+        close(to_spiral[0]);
+        close(to_spiral[1]);
+        close(from_spiral[0]);
+        close(from_spiral[1]);
+
+        execlp(target->executable, target->executable, (char *)NULL);
+        perror("execlp");
+        _exit(127);
+    }
+
+    close(to_spiral[0]);
+    close(from_spiral[1]);
+    target->stdin_fd = to_spiral[1];
+    target->stdout_fd = from_spiral[0];
+
+    if (target->setup_text != NULL && target->setup_text[0] != '\0') {
+        if (!write_all_to_fd(target->stdin_fd, target->setup_text) ||
+            !write_all_to_fd(target->stdin_fd, "\n")) {
+            fprintf(stderr, "Error: failed to write setup text to SPIRAL.\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+//close all the files and channels that are in use
+static void stop_spiral(spiral_target *target)
+{
+    int status;
+
+    if (target == NULL) {
+        return;
+    }
+    if (target->stdin_fd >= 0) {
+        close(target->stdin_fd);
+        target->stdin_fd = -1;
+    }
+    if (target->stdout_fd >= 0) {
+        close(target->stdout_fd);
+        target->stdout_fd = -1;
+    }
+    if (target->pid > 0) {
+        waitpid(target->pid, &status, 0);
+        target->pid = -1;
+    }
+}
+
+//try to read the output and return exit code as noncoero if the execution is not successful
+static int read_char_with_timeout(int fd, char *out)
+{
+    fd_set read_fds;
+    struct timeval timeout;
+    ssize_t bytes_read;
+
+    while (true) {
+        FD_ZERO(&read_fds);
+        FD_SET(fd, &read_fds);
+        timeout.tv_sec = SPIRAL_READ_TIMEOUT_SECONDS;
+        timeout.tv_usec = 0;
+
+        int ready = select(fd + 1, &read_fds, NULL, NULL, &timeout);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (ready == 0) {
+            return 0;
+        }
+
+        bytes_read = read(fd, out, 1);
+        if (bytes_read < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (bytes_read == 0) {
+            return -1;
+        }
+        return 1;
+    }
+}
+
+//get the result from one input to spiral
+static bool read_spiral_numeric_result(spiral_target *target, mpfr_t output)
+{
+    char line[SPIRAL_LINE_BUFFER_SIZE];
+    size_t length = 0;
+
+    while (true) {
+        char ch;
+        int status = read_char_with_timeout(target->stdout_fd, &ch);
+        if (status < 0) {
+            fprintf(stderr, "Error: failed to read SPIRAL output.\n");
+            return false;
+        }
+        if (status == 0) {
+            fprintf(stderr, "Error: timed out while waiting for SPIRAL output.\n");
+            return false;
+        }
+
+        if (ch == '\n') {
+            line[length] = '\0';
+            if (parse_mpfr_from_line(output, line)) {
+                return true;
+            }
+            length = 0;
+        } else if (length + 1 < sizeof(line)) {
+            line[length++] = ch;
+        } else {
+            length = 0;
+        }
+    }
+}
+
+//write a single set of samples to spiral
+static bool run_spiral_sample(
+    spiral_target *target,
+    const combination_array *combinations,
+    combination inputs,
+    size_t num_inputs,
+    mpfr_t output)
+{
+    char command[SPIRAL_COMMAND_BUFFER_SIZE];
+
+    if (build_spiral_command(
+            target,
+            combinations,
+            inputs,
+            num_inputs,
+            command,
+            sizeof(command)) != 0) {
+        fprintf(stderr, "Error: failed to build SPIRAL command.\n");
+        return false;
+    }
+
+    if (!write_all_to_fd(target->stdin_fd, command)) {
+        fprintf(stderr, "Error: failed to write command to SPIRAL.\n");
+        return false;
+    }
+
+    return read_spiral_numeric_result(target, output);
+}
+#endif
+
 //initialize function_result
 static void function_result_init(function_result *result, user_output_type type)
 {
@@ -829,6 +1441,7 @@ static void function_result_to_mpfr(mpfr_t destination, const function_result *r
     }
 }
 
+//determine if the samples that is within the sigma value
 static bool results_within_sigma(
     const function_result *first,
     const function_result *second,
@@ -899,6 +1512,7 @@ static bool results_within_sigma(
     return *absolute_within || *relative_within;
 }
 
+//get each combination of samples, put into functions, get results, turn types, compare
 static int compare_all_combinations(
     combination_array *combinations,
     size_t num_inputs,
@@ -978,6 +1592,95 @@ cleanup:
     return status;
 }
 
+static int compare_all_combinations_with_spiral(
+    combination_array *combinations,
+    size_t num_inputs,
+    const loaded_function *first_function,
+    user_output_type first_type,
+    spiral_target *spiral,
+    mpfr_srcptr sigma,
+    mpz_t absolute_within_count,
+    mpz_t relative_within_count)
+{
+    mpz_srcptr total = combination_array_num_comb(combinations);
+    mpz_t index;
+    function_result first_result;
+    function_result spiral_result;
+    int status = -1;
+
+    if (total == NULL) {
+        return -1;
+    }
+
+    mpz_set_ui(absolute_within_count, 0);
+    mpz_set_ui(relative_within_count, 0);
+    mpz_init_set_ui(index, 0);
+    function_result_init(&first_result, first_type);
+    function_result_init(&spiral_result, USER_OUTPUT_MPFR);
+
+    while (mpz_cmp(index, total) < 0) {
+        combination inputs = get_the_ith_combination(combinations, index);
+        if (inputs == NULL) {
+            fprintf(stderr, "Error: failed to generate a combination.\n");
+            goto cleanup;
+        }
+
+        function_result_reset(&first_result);
+        function_result_reset(&spiral_result);
+
+        int first_status = first_function->function(
+            inputs, num_inputs, function_result_output(&first_result));
+        if (first_status != 0) {
+            gmp_fprintf(stderr,
+                "Error: target function failed at combination %Zd "
+                "(status %d).\n",
+                index, first_status);
+            free_ith_combination(inputs);
+            goto cleanup;
+        }
+
+        //run the sample in spiral and get the result
+        if (!run_spiral_sample(
+                spiral,
+                combinations,
+                inputs,
+                num_inputs,
+                spiral_result.mpfr)) {
+            gmp_fprintf(stderr,
+                "Error: SPIRAL target failed at combination %Zd.\n",
+                index);
+            free_ith_combination(inputs);
+            goto cleanup;
+        }
+
+        bool absolute_within;
+        bool relative_within;
+        results_within_sigma(
+            &first_result,
+            &spiral_result,
+            sigma,
+            &absolute_within,
+            &relative_within);
+        if (absolute_within) {
+            mpz_add_ui(absolute_within_count, absolute_within_count, 1);
+        }
+        if (relative_within) {
+            mpz_add_ui(relative_within_count, relative_within_count, 1);
+        }
+
+        free_ith_combination(inputs);
+        mpz_add_ui(index, index, 1);
+    }
+
+    status = 0;
+
+cleanup:
+    function_result_clear(&first_result);
+    function_result_clear(&spiral_result);
+    mpz_clear(index);
+    return status;
+}
+
 //Function that calculate and print out the amount and precentage of samples that stays within the provided sigma
 static void print_one_comparison_result(const char *label, mpz_srcptr within_count, mpz_srcptr total)
 {
@@ -1015,6 +1718,21 @@ static void print_comparison_result(
         total);
 }
 
+//the function that determines if user is going to use spiral as one end of the output
+static bool parse_use_spiral(int argc, char **argv)
+{
+    if (argc == 1) {
+        return false;
+    }
+    if (argc == 2 && strcmp(argv[1], "--spiral") == 0) {
+        return true;
+    }
+
+    fprintf(stderr, "Usage: %s [--spiral]\n", argv[0]);
+    fprintf(stderr, "  no flag   compare two dynamically loaded functions\n");
+    fprintf(stderr, "  --spiral  compare one dynamically loaded function against SPIRAL\n");
+    return false;
+}
 
 /* The main function that takes in arguments from user:
     in the format of compiled file name of compare.c
@@ -1040,13 +1758,17 @@ static void print_comparison_result(
             -signed int: mpz precision(0< <=256) num_of_samples
             -float: mpfr precision mantissa num_of_samples type_of_rounding（RNDN\RNDZ\RNDU\RNDD\RNDA）
 */
-int main(void)
+int main(int argc, char **argv)
 {
+    bool invalid_arguments = argc > 2 ||
+                             (argc == 2 && strcmp(argv[1], "--spiral") != 0);
+    bool use_spiral = parse_use_spiral(argc, argv);
     int exit_code = CMP_EXIT_PARSE;
     function_info first_function;
     function_info second_function;
     loaded_function first_loaded = {0};
     loaded_function second_loaded = {0};
+    spiral_target spiral = {0};
     size_t sampling_count;
     sample_array_list *sal = NULL;
     combination_array *combinations = NULL;
@@ -1056,9 +1778,22 @@ int main(void)
     mpfr_init2(sigma, 256);
     mpz_init(absolute_within_count);
     mpz_init(relative_within_count);
+#ifndef _WIN32
+    spiral.pid = -1;
+    spiral.stdin_fd = -1;
+    spiral.stdout_fd = -1;
+#endif
+
+    if (invalid_arguments) {
+        exit_code = CMP_EXIT_USAGE;
+        goto cleanup;
+    }
 
     puts("Output types: int64, uint64, float, double, mpz, mpfr.");
     puts("DLL function signature: int name(void **inputs, size_t num_inputs, void *output);");
+    if (use_spiral) {
+        puts("SPIRAL mode enabled. The txt template uses printf-style placeholders for sampled inputs.");
+    }
 
     if (read_function_info(
             "Please enter the first DLL path, function name, and output type: ",
@@ -1066,10 +1801,16 @@ int main(void)
         goto cleanup;
     }
 
-    if (read_function_info(
-            "Please enter the second DLL path, function name, and output type: ",
-            &second_function) != 0) {
-        goto cleanup;
+    if (use_spiral) {
+        if (read_spiral_info(&spiral) != 0) {
+            goto cleanup;
+        }
+    } else {
+        if (read_function_info(
+                "Please enter the second DLL path, function name, and output type: ",
+                &second_function) != 0) {
+            goto cleanup;
+        }
     }
 
     if (read_sigma(sigma) != 0) {
@@ -1103,8 +1844,13 @@ int main(void)
     printf("All inputs accepted.\n");
     printf("First target:  %s -> %s\n",
            first_function.path, first_function.function_name);
-    printf("Second target: %s -> %s\n",
-           second_function.path, second_function.function_name);
+    if (use_spiral) {
+        printf("Second target: SPIRAL %s using %s\n",
+               spiral.executable, spiral.txt_path);
+    } else {
+        printf("Second target: %s -> %s\n",
+               second_function.path, second_function.function_name);
+    }
 
     combinations = combine_arrays(sal);
     if (combinations == NULL) {
@@ -1117,23 +1863,41 @@ int main(void)
         goto cleanup;
     }
 
-    if (!load_function(&second_function, &second_loaded)) {
-        exit_code = CMP_EXIT_RUNTIME;
-        goto cleanup;
-    }
-
-    if (compare_all_combinations(
-            combinations,
-            sampling_count,
-            &first_loaded,
-            first_function.output_type,
-            &second_loaded,
-            second_function.output_type,
-            sigma,
-            absolute_within_count,
-            relative_within_count) != 0) {
-        exit_code = CMP_EXIT_RUNTIME;
-        goto cleanup;
+    if (use_spiral) {
+        if (!start_spiral(&spiral)) {
+            exit_code = CMP_EXIT_RUNTIME;
+            goto cleanup;
+        }
+        if (compare_all_combinations_with_spiral(
+                combinations,
+                sampling_count,
+                &first_loaded,
+                first_function.output_type,
+                &spiral,
+                sigma,
+                absolute_within_count,
+                relative_within_count) != 0) {
+            exit_code = CMP_EXIT_RUNTIME;
+            goto cleanup;
+        }
+    } else {
+        if (!load_function(&second_function, &second_loaded)) {
+            exit_code = CMP_EXIT_RUNTIME;
+            goto cleanup;
+        }
+        if (compare_all_combinations(
+                combinations,
+                sampling_count,
+                &first_loaded,
+                first_function.output_type,
+                &second_loaded,
+                second_function.output_type,
+                sigma,
+                absolute_within_count,
+                relative_within_count) != 0) {
+            exit_code = CMP_EXIT_RUNTIME;
+            goto cleanup;
+        }
     }
 
     print_comparison_result(
@@ -1143,6 +1907,7 @@ int main(void)
     exit_code = CMP_EXIT_OK;
 
 cleanup:
+    stop_spiral(&spiral);
     unload_function(&second_loaded);
     unload_function(&first_loaded);
     if (combinations != NULL) {
@@ -1154,5 +1919,6 @@ cleanup:
     mpz_clear(relative_within_count);
     mpz_clear(absolute_within_count);
     mpfr_clear(sigma);
+    clear_spiral_target(&spiral);
     return exit_code;
 }

@@ -39,6 +39,7 @@ enum {
 #define SPIRAL_COMMAND_BUFFER_SIZE 4096
 #define SPIRAL_LINE_BUFFER_SIZE 2048
 #define SPIRAL_READ_TIMEOUT_SECONDS 10
+#define SPIRAL_RESULT_MARKER "__CMP_RESULT__"
 
 typedef int (*sampling_parse_fn)(int argc, char **argv, sample_array_list *sal);
 
@@ -1111,14 +1112,21 @@ static int build_spiral_command(
     return 0;
 }
 
-//get the result and turn the result into mpfr for comparison
-static bool parse_mpfr_from_line(mpfr_t out, const char *line)
+//Get a marked result and turn it into MPFR for comparison.
+static bool parse_marked_mpfr_from_line(mpfr_t out, const char *line)
 {
     char copy[SPIRAL_LINE_BUFFER_SIZE];
     char *token;
+    const char *marked_result = strstr(line, SPIRAL_RESULT_MARKER);
 
-    snprintf(copy, sizeof(copy), "%s", line);
-    token = strtok(copy, " \t\r\n,;:");
+    if (marked_result == NULL) {
+        return false;
+    }
+
+    marked_result += strlen(SPIRAL_RESULT_MARKER);
+
+    snprintf(copy, sizeof(copy), "%s", marked_result);
+    token = strtok(copy, " \t\r\n,;:=");
     while (token != NULL) {
         if (mpfr_set_str(out, token, 10, MPFR_RNDN) == 0 &&
             mpfr_number_p(out)) {
@@ -1312,13 +1320,13 @@ static bool read_spiral_numeric_result(spiral_target *target, mpfr_t output)
             return false;
         }
         if (status == 0) {
-            fprintf(stderr, "Error: timed out while waiting for SPIRAL output.\n");
+            fprintf(stderr, "Error: timed out while waiting for marked SPIRAL output.\n");
             return false;
         }
 
         if (ch == '\n') {
             line[length] = '\0';
-            if (parse_mpfr_from_line(output, line)) {
+            if (parse_marked_mpfr_from_line(output, line)) {
                 return true;
             }
             length = 0;
@@ -1793,6 +1801,8 @@ int main(int argc, char **argv)
     puts("DLL function signature: int name(void **inputs, size_t num_inputs, void *output);");
     if (use_spiral) {
         puts("SPIRAL mode enabled. The txt template uses printf-style placeholders for sampled inputs.");
+        printf("SPIRAL result lines must include marker %s before the numeric result.\n",
+               SPIRAL_RESULT_MARKER);
     }
 
     if (read_function_info(

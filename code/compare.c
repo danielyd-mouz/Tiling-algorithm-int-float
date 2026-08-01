@@ -21,7 +21,7 @@
 #endif
 #include "../header/compare_api.h"
 #include "../header/entire_combination.h"
-#include "../header/TIling_function_Simplified.h"
+#include "../header/Tiling_function_Simplified.h"
 #include "../header/Tiling_function.h"
 
 enum {
